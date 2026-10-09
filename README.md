@@ -30,10 +30,20 @@ tests/
   sync.cjs      # 临时仓库中的同步与数据保护
   config.cjs    # 配置及 Git 错误信息
 scripts/
-  read-record.cjs
-config.json
-main.js         # Obsidian 实际加载的构建产物
+  read-record.cjs  # 只读解析提交元数据
+config.json        # 默认配置，同时打包进 main.js
+dist/              # 构建产物，即分发内容（不入库）
+  manifest.json
+  main.js
+  config.json
+  scripts/read-record.cjs
 ```
+
+## 安装
+
+执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/custom-git-sync/`，最后在 Obsidian 里启用插件。
+其中只有 `manifest.json` 和 `main.js` 是必需的。`config.json` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具。
+源码仓库应放在 Vault 之外，否则源码会被插件同步进笔记仓库。
 
 ## 前提
 
@@ -110,4 +120,5 @@ npm test
 ```
 
 测试会创建独立的临时本地仓库和 bare 远程仓库，不访问网络；临时目录会打印并保留，供审计。
-修改 src/ 后必须重新构建 main.js，再禁用并启用插件。只修改 config.json 时，重新启用插件即可。
+`npm run build` 会清空并重建 `dist/`；`npm test` 会先执行构建，UI 测试直接加载 `dist/main.js`。
+修改 src/ 后，重新构建并把 `dist/` 复制到 Vault 的插件目录，再禁用并启用插件。只修改插件目录里的 config.json 时，重新启用插件即可。

@@ -1,4 +1,8 @@
 import { build } from "esbuild";
+import { cp, rm } from "node:fs/promises";
+
+// dist/ 即分发内容：每次重建，避免残留旧文件
+await rm("dist", { recursive: true, force: true });
 
 await build({
   entryPoints: ["src/main.ts"],
@@ -7,6 +11,8 @@ await build({
   external: ["obsidian"],
   format: "cjs",
   target: "es2018",
-  outfile: "main.js",
+  outfile: "dist/main.js",
   logLevel: "info"
 });
+
+for (const file of ["manifest.json", "config.json", "scripts/read-record.cjs"]) await cp(file, `dist/${file}`);

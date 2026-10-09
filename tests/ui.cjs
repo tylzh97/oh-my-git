@@ -38,7 +38,7 @@ const context = {
   window: { setTimeout, clearTimeout, setInterval(fn, ms) { intervalMs = ms; cron = fn; return 123; } },
   AbortController, Date, document: {},
 };
-vm.runInNewContext(fs.readFileSync('main.js', 'utf8'), context);
+vm.runInNewContext(fs.readFileSync('dist/main.js', 'utf8'), context);
 const Plugin = context.module.exports.default;
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 function plugin() {
