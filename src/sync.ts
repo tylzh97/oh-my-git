@@ -53,6 +53,10 @@ export class GitSyncEngine {
     if (this.signal?.aborted) throw new SyncError("failed", "Sync cancelled");
     return runGit(args, cwd, this.config.gitTimeoutSeconds * 1000, input);
   }
+  // 一旦开始就必须做完的步骤：不检查取消信号，避免把 Vault 留在应用到一半的状态
+  private gitAlways(args: string[], cwd = this.root): Promise<string> {
+    return runGit(args, cwd, this.config.gitTimeoutSeconds * 1000);
+  }
   private tryGit(args: string[], cwd = this.root): Promise<string> {
     return this.git(args, cwd).catch(() => "");
   }
@@ -196,11 +200,11 @@ export class GitSyncEngine {
       await this.phase("apply", { resultCommit: result });
       // 两树 read-tree 拒绝覆盖未提交修改和未跟踪文件；不在 Vault 中 reset --hard
       await this.git(["read-tree", "-m", "-u", local, result]);
-      await this.git(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
+      await this.gitAlways(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
       await this.phase("applied");
       return result;
     } finally {
-      await this.tryGit(["worktree", "remove", "--force", temp]);
+      await this.gitAlways(["worktree", "remove", "--force", temp]).catch(() => "");
     }
   }
   private async merge(temp: string, local: string, remote: string, refs: RecoveryRefs): Promise<string> {

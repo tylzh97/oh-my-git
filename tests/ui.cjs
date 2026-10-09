@@ -128,7 +128,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   // 跳过超限文件：同步成功，显示 ! 和文件列表，计数清零，不阻塞
   r.engine.run = async (event, details) => { requests.push({ event, details }); return { skipped: [{ path: 'big.mp4', bytes: 40 * 1024 * 1024 }] }; };
   await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(r.failures, 0);
-  assert.ok(tooltip.includes('已跳过') && tooltip.includes('big.mp4 (40.00 MiB)'));
+  assert.ok(tooltip.includes('已跳过') && tooltip.includes('big.mp4 (40.00 MiB)')); assert.ok(!tooltip.includes('上次同步失败'));
   const sizeCount = requests.length; await r.sync('onSave'); assert.equal(requests.length, sizeCount + 1);
 
   // 连续保存只在静默期满后触发一次；其他同步开始或卸载时取消

@@ -104,6 +104,17 @@ async function failures() {
  const last=(await history(r)).at(-1);assert.equal(last.outcome,'error');assert.equal(last.phase,'apply');
  console.log('PASS concurrent edit is never overwritten, apply failure leaves no pending state');
 
+ // read-tree 完成后才收到取消：update-ref 和临时 worktree 清理仍然执行，分支与工作区一致
+ const x=await fixture('cancel-apply');await run(x);await remoteCommit(x,'remote.md','remote\n');await write(x.local,'local.md','local\n');
+ const controller=new AbortController(),originalGit=x.engine.git.bind(x.engine);
+ x.engine.git=async(args,...rest)=>{const out=await originalGit(args,...rest);if(args[0]==='read-tree'&&args[1]==='-m')controller.abort();return out;};
+ await assert.rejects(()=>x.engine.run('onLoad',undefined,controller.signal),e=>e.message==='Sync cancelled');
+ const applied=(await history(x)).at(-1);assert.equal(applied.phase,'push');assert.equal(git(x.local,'rev-parse','HEAD'),applied.resultCommit);
+ assert.equal(git(x.local,'status','--porcelain'),'');assert.equal(await read(x.local,'remote.md'),'remote\n');
+ assert.equal(git(x.local,'worktree','list','--porcelain').split('\n').filter(line=>line.startsWith('worktree ')).length,1);
+ assert.deepEqual((await fs.readdir(await stateDir(x))).filter(name=>name.startsWith('.omg.')),[]);
+ console.log('PASS cancellation after read-tree still completes branch update and worktree cleanup');
+
  // 启动时清理强制退出的残留：pending 归档为 interrupted，.omg.* 和插件留下的 index.lock 被删除
  const c=await fixture('cleanup');await run(c);const dir=await stateDir(c),lock=path.join(c.local,'.git','index.lock');
  await fs.writeFile(lock,'');await write(c.local,'locked.md','locked\n');

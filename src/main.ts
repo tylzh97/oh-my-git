@@ -32,8 +32,10 @@ export default class CustomGitSyncPlugin extends Plugin {
     const error = this.failure ?? new SyncError("failed");
     const files = error.files?.map(file => `${file.path} (${(file.bytes / 1024 / 1024).toFixed(2)} MiB)`).join("; ");
     const limit = error.code === "size" ? ` (${this.config.maxFileMiB} MiB)` : "";
-    const action = this.state === "warning" ? t("warning") : !this.blocked() ? `${t("repeated")} (${this.failures})` : t(this.engine ? "resolve" : "reload");
-    return `Git Sync: ${errorText(error.code)}${limit}${files ? ` — ${files}` : ""} — ${action}`;
+    // size 时同步其实已成功，不追加失败说明
+    const action = error.code === "size" ? "" : this.state === "warning" ? t("warning")
+      : !this.blocked() ? `${t("repeated")} (${this.failures})` : t(this.engine ? "resolve" : "reload");
+    return `Git Sync: ${errorText(error.code)}${limit}${files ? ` — ${files}` : ""}${action ? ` — ${action}` : ""}`;
   }
   private render(): void {
     if (!this.button) return;
