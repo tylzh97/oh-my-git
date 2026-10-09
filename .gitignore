@@ -1,0 +1,5 @@
+/node_modules/
+/main.js
+npm-debug.log*
+*.tsbuildinfo
+.DS_Store

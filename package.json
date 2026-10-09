@@ -1,0 +1,16 @@
+{
+  "name": "custom-git-sync",
+  "version": "0.3.0",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && node esbuild.config.mjs",
+    "test": "npm run build && node tests/config.cjs && node tests/ui.cjs && node tests/sync.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "esbuild": "^0.25.0",
+    "obsidian": "^1.5.0",
+    "typescript": "^5.7.0"
+  }
+}
