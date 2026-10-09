@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG, loadConfig, type SyncConfig } from "./config";
 import { errorText, t } from "./i18n";
 
 type SyncState = "idle" | "syncing" | "success" | "warning" | "error";
+const PLACEBO_SPIN_MS = 600;
 
 export default class CustomGitSyncPlugin extends Plugin {
   private enabled = false;
@@ -18,6 +19,7 @@ export default class CustomGitSyncPlugin extends Plugin {
   private failure?: SyncError;
   private config: SyncConfig = DEFAULT_CONFIG;
   private saveTimer?: number;
+  private placeboTimer?: number;
   private errorLabel(): string {
     const error = this.failure ?? new SyncError("failed");
     const files = error.files?.map(file => `${file.path} (${(file.bytes / 1024 / 1024).toFixed(2)} MiB)`).join("; ");
@@ -77,6 +79,21 @@ export default class CustomGitSyncPlugin extends Plugin {
       if (signal.aborted) done();
     });
   }
+  private spin(): void {
+    this.animation?.cancel();
+    this.animation = this.button?.querySelector("svg")?.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], { duration: 1000, iterations: Infinity, easing: "linear" });
+  }
+  // Ctrl/Cmd+S 的安慰剂：只转圈并显示成功，不执行 Git；仅在待机时响应，不掩盖 ! 和 ×
+  private placebo(): void {
+    if (!this.enabled || this.task || this.state !== "idle") return;
+    this.log("Placebo save feedback");
+    this.state = "syncing"; this.render(); this.spin();
+    this.placeboTimer = window.setTimeout(() => {
+      this.animation?.cancel(); this.animation = undefined;
+      this.state = "success"; this.render();
+      this.placeboTimer = window.setTimeout(() => { this.placeboTimer = undefined; this.state = "idle"; this.render(); }, this.config.successDisplayMs);
+    }, PLACEBO_SPIN_MS);
+  }
   private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
     if (this.task) { this.log("Sync dropped (busy)", { event }); return; }
     if (this.state === "error" && event !== "onRetry" && !(event === "onResolve" && details?.strategy && this.failure?.code === "conflict")) {
@@ -86,11 +103,11 @@ export default class CustomGitSyncPlugin extends Plugin {
     const task = new AbortController(); this.task = task;
     // 本次同步提交整个仓库，已包含待同步的保存
     window.clearTimeout(this.saveTimer); this.saveTimer = undefined;
+    // 真实同步接管状态栏
+    window.clearTimeout(this.placeboTimer); this.placeboTimer = undefined;
     this.menu?.hide(); this.state = "syncing"; this.failure = undefined;
     const button = this.button;
-    this.render();
-    const icon = button.querySelector("svg");
-    if (icon) this.animation = icon.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], { duration: 1000, iterations: Infinity, easing: "linear" });
+    this.render(); this.spin();
     try {
       await this.engine.run(event, details, task.signal);
       if (task.signal.aborted) return;
@@ -139,6 +156,10 @@ export default class CustomGitSyncPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => this.trigger("onCron"), this.config.syncIntervalSeconds * 1000));
     this.registerEvent(this.app.workspace.on("file-open", file => this.trigger("onOpen", { path: file?.path ?? null, source: "workspace:file-open" })));
     this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.scheduleSave(file.path); }));
+    // 不拦截按键，Obsidian 自己的保存照常执行
+    this.registerDomEvent(document, "keydown", (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !event.repeat) this.placebo();
+    });
     this.app.workspace.onLayoutReady(() => {
       if (!this.enabled) return;
       this.openFiles = this.collectOpenFiles();
@@ -151,7 +172,7 @@ export default class CustomGitSyncPlugin extends Plugin {
     this.trigger("onLoad");
   }
   onunload(): void {
-    this.log("onUnload"); this.enabled = false; window.clearTimeout(this.saveTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
+    this.log("onUnload"); this.enabled = false; window.clearTimeout(this.saveTimer); window.clearTimeout(this.placeboTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
     this.openFiles.clear(); this.button = undefined;
   }
 }

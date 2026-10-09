@@ -36,7 +36,7 @@ const context = {
   module: { exports: {} }, require(name) { return name === 'obsidian' ? sdk : require(name); }, process,
   console: { log(...args) { logs.push(args); } },
   window: { setTimeout, clearTimeout, setInterval(fn, ms) { intervalMs = ms; cron = fn; return 123; } },
-  AbortController, Date,
+  AbortController, Date, document: {},
 };
 vm.runInNewContext(fs.readFileSync('main.js', 'utf8'), context);
 const Plugin = context.module.exports.default;
@@ -53,7 +53,8 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
     workspace: { on() { return {}; }, onLayoutReady(fn) { fn(); }, iterateAllLeaves() {} },
   };
   p.addStatusBarItem = () => button;
-  p.registerDomEvent = p.registerEvent = p.registerInterval = () => {};
+  p.registerEvent = p.registerInterval = () => {};
+  p.registerDomEvent = (target, type, fn) => { if (target === context.document && type === 'keydown') p.saveKey = fn; };
   // Test initialization without launching Git against an actual Vault.
   p.trigger = event => requests.push({ event });
   return p;
@@ -131,7 +132,22 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   const loaded = startup(adapter); await loaded.onload();
   assert.equal(configPath, '.custom/plugins/renamed/config.json'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
-  cron(); assert.equal(requests.at(-1).event, 'onCron'); loaded.onunload();
+  cron(); assert.equal(requests.at(-1).event, 'onCron');
+
+  // Ctrl/Cmd+S 安慰剂：只改状态栏，不调用 engine；! 和 × 下不响应；真实同步可接管
+  loaded.config = { ...loaded.config, successDisplayMs: 200 };
+  const placeboCount = requests.length;
+  loaded.saveKey({ ctrlKey: true, key: 'a' }); assert.equal(loaded.state, 'idle');
+  loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, 'syncing'); assert.equal(icon, 'refresh-cw');
+  await sleep(650); assert.equal(loaded.state, 'success'); assert.equal(icon, 'check');
+  await sleep(250); assert.equal(loaded.state, 'idle'); assert.equal(requests.length, placeboCount);
+  loaded.saveKey({ metaKey: true, key: 'S' }); assert.equal(loaded.state, 'syncing'); await sleep(900); assert.equal(loaded.state, 'idle');
+  for (const blocked of ['warning', 'error']) { loaded.state = blocked; loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, blocked); }
+  loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' });
+  loaded.engine = { async run(event) { requests.push({ event }); throw new SyncError('failed'); } };
+  await loaded.sync('onCron'); assert.equal(loaded.state, 'warning');
+  await sleep(900); assert.equal(loaded.state, 'warning'); assert.equal(icon, 'triangle-alert');
+  loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' }); loaded.onunload(); await sleep(900); assert.equal(loaded.state, 'syncing');
   const fallback = startup(new FileSystemAdapter(), { id: 'custom-git-sync' }); await fallback.onload();
   assert.equal(intervalMs, 300000); fallback.onunload();
 
@@ -143,6 +159,6 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS save debounce, warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS save debounce, Ctrl/Cmd+S placebo, warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

@@ -49,6 +49,7 @@ main.js         # Obsidian 实际加载的构建产物
 - onOpen / onSave / onClose / onCron / onClick：提交整个仓库 → push → 月度备份，不拉取、不合并。
 - onSave 带防抖：每次文件修改都把计时器重置为 saveDebounceSeconds，静默期满才同步一次。连续编辑期间由 onCron 兜底。其他事件开始同步时会取消计时器，因为这次同步已包含这些修改。
 - 「重试」统一按 onLoad 模式完整执行一次。
+- Ctrl/Cmd+S 是安慰剂：只在待机时让图标转一下再显示 √，不执行任何 Git 操作，也不拦截 Obsidian 自己的保存。黄色 ! 和红色 × 状态下不响应，以免掩盖故障。真实同步开始时会立即接管状态栏。
 - onUnload：请求取消，当前 Git 命令执行完后不再启动后续步骤。
 
 同步进行中（包括显示成功 √ 期间）新触发的事件直接丢弃。
