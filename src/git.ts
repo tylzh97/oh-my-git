@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 
-export type ErrorCode = "config" | "repo" | "remote" | "refused" | "conflict" | "size" | "failed";
+export type ErrorCode = "config" | "repo" | "unfinished" | "remote" | "refused" | "conflict" | "size" | "failed";
 export interface OversizedFile { path: string; bytes: number }
 
 // 同步层面的错误：code 决定 UI 表现，message 仅用于显示和日志

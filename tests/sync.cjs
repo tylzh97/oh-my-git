@@ -94,6 +94,26 @@ async function failures() {
  assert.equal(git(u.local,'show','HEAD:offline.md'),'offline');await expectCode(()=>run(u,'onLoad'),'remote');
  console.log('PASS missing upstream, refused push, unreachable remote keeps local snapshots');
 
+ // 手动 merge 冲突未解决：不提交、不推送冲突标记；用户完成合并后自动恢复
+ const m=await fixture('manual-merge');await run(m);await remoteCommit(m,'note.md','remote side\n');
+ await commit(m.local,'note.md','local side\n');git(m.local,'fetch');
+ assert.throws(()=>git(m.local,'merge','origin/main'));const before=git(m.local,'rev-parse','HEAD');
+ await assert.rejects(()=>run(m,'onSave'),e=>e.code==='unfinished'&&e.message.includes('MERGE_HEAD'));
+ assert.equal(git(m.local,'rev-parse','HEAD'),before);assert.notEqual(git(m.local,'ls-files','-u'),'');
+ assert.ok(!git(m.remote,'show','main:note.md').includes('<<<<<<<'));
+ await write(m.local,'note.md','resolved\n');git(m.local,'add','note.md');git(m.local,'commit','--no-edit');
+ await run(m,'onSave');assert.equal(git(m.remote,'show','main:note.md'),'resolved');
+ // cherry-pick 冲突同样拦截，取消后恢复
+ git(m.local,'checkout','-q','-b','side');await commit(m.local,'note.md','side\n');const pick=git(m.local,'rev-parse','HEAD');
+ git(m.local,'checkout','-q','main');await commit(m.local,'note.md','main\n');assert.throws(()=>git(m.local,'cherry-pick',pick));
+ await assert.rejects(()=>run(m,'onCron'),e=>e.code==='unfinished'&&e.message.includes('CHERRY_PICK_HEAD'));
+ git(m.local,'cherry-pick','--abort');await run(m,'onCron');assert.equal(git(m.remote,'show','main:note.md'),'main');
+ // rebase 冲突（HEAD 分离）同样报 unfinished 而非 repo，取消后自动恢复
+ git(m.local,'checkout','-q','side');assert.throws(()=>git(m.local,'rebase','main'));
+ await assert.rejects(()=>run(m,'onCron'),e=>e.code==='unfinished'&&e.message.includes('rebase-merge'));
+ git(m.local,'rebase','--abort');git(m.local,'checkout','-q','main');await run(m,'onCron');
+ console.log('PASS unfinished merge/cherry-pick/rebase blocks snapshot without touching the repository, resumes after user finishes');
+
  // 同步期间写入的未跟踪文件会被 read-tree 拒绝覆盖；失败不留下 pending，不阻塞后续同步
  let edited=false;const r=await fixture('concurrent-edit',DEFAULT_CONFIG,(event,details)=>{
    if(!edited&&details?.phase==='apply'){edited=true;require('node:fs').writeFileSync(path.join(r.local,'remote.md'),'edited during sync\n')}
@@ -115,18 +135,19 @@ async function failures() {
  assert.deepEqual((await fs.readdir(await stateDir(x))).filter(name=>name.startsWith('.omg.')),[]);
  console.log('PASS cancellation after read-tree still completes branch update and worktree cleanup');
 
- // 启动时清理强制退出的残留：pending 归档为 interrupted，.omg.* 和插件留下的 index.lock 被删除
+ // 启动时清理强制退出的残留：pending 归档为 interrupted，.omg.* 被删除；index.lock 归属无法确认，从不删除
  const c=await fixture('cleanup');await run(c);const dir=await stateDir(c),lock=path.join(c.local,'.git','index.lock');
  await fs.writeFile(lock,'');await write(c.local,'locked.md','locked\n');
- await expectCode(()=>run(c,'onSave'),'failed');await expectCode(()=>run(c,'onLoad'),'failed'); // 无残留 pending 时不删用户的锁
+ await expectCode(()=>run(c,'onSave'),'failed');await expectCode(()=>run(c,'onLoad'),'failed');
  await fs.writeFile(path.join(dir,'.omg.pending.json'),JSON.stringify({operationId:'killed',phase:'push'}));
- await fs.mkdir(path.join(dir,'.omg.worktree-stale'));await run(c,'onLoad');
- assert.equal(git(c.remote,'show','main:locked.md'),'locked');
- assert.deepEqual((await fs.readdir(dir)).filter(name=>name.startsWith('.omg.')),[]);
+ await fs.mkdir(path.join(dir,'.omg.worktree-stale'));
+ await assert.rejects(()=>run(c,'onLoad'),e=>e.code==='repo'&&e.message.includes('index.lock'));
+ assert.ok(await fs.stat(lock));assert.deepEqual((await fs.readdir(dir)).filter(name=>name.startsWith('.omg.')),[]);
  assert.ok((await history(c)).some(entry=>entry.operationId==='killed'&&entry.outcome==='interrupted'&&entry.phase==='push'));
+ await fs.rm(lock);await run(c,'onRetry');assert.equal(git(c.remote,'show','main:locked.md'),'locked');
  const running=Symbol.for('omg-sync.running');globalThis[running]=true;
  await assert.rejects(()=>run(c,'onLoad'),e=>e.code==='failed'&&e.message.includes('previous plugin instance'));globalThis[running]=false;
- console.log('PASS startup cleanup of interrupted state, user locks untouched, previous instance guard');
+ console.log('PASS startup cleanup of interrupted state, locks never deleted, previous instance guard');
 }
 
 async function sizes() {

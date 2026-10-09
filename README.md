@@ -85,7 +85,9 @@ dist/              # 构建产物，即分发内容（不入库）
 失败分两类：
 
 - **阻塞**（立即 ×，暂停普通事件，直到重试成功）：config.jsonc 无法读取（`config`）、仓库状态不满足，例如没有 upstream 或分离 HEAD（`repo`）、远程拒绝推送，例如 hook、受保护分支或权限（`refused`）、历史冲突（`conflict`）。历史冲突时菜单额外提供「保持远程 / 保持本地」。
-- **不阻塞**：无法连接远程或认证失败（`remote`），以及其余失败（`failed`）。先显示 !；**连续 escalateAfterFailures 次**（默认 5）失败后显示 ×，但普通事件仍照常执行，本地快照不会中断。任意一次成功即清零。
+- **不阻塞**：仓库有未完成的手动 Git 操作（`unfinished`，见下）、无法连接远程或认证失败（`remote`），以及其余失败（`failed`）。先显示 !；**连续 escalateAfterFailures 次**（默认 5）失败后显示 ×，但普通事件仍照常执行，本地快照不会中断。任意一次成功即清零。
+
+`unfinished`：你在终端执行 merge、cherry-pick、revert 或 rebase 且尚未完成时（存在 `MERGE_HEAD` 等标记，或索引里有未合并的文件），插件在修改仓库**之前**就停下，不会把冲突标记当作已解决提交和推送。你完成（`git commit`）或取消（`--abort`）之后，下一次事件会自动恢复同步，不需要点重试。
 
 错误分类只看 Git 的退出码和结构化输出，不匹配报错文字：push 的 `--porcelain` 输出中有 `!` 开头的行，表示引用被拒绝（再根据远程是否分叉区分 `conflict` 和 `refused`）；没有这类行，说明没能与远程完成通信（`remote`）。网络故障和认证失败无法区分，统一按 `remote` 计数。
 失败时 Git 的原始输出会打印到控制台（Ctrl+Shift+I → Console，`[Custom Git Sync]` 前缀），其中可能包含 remote URL。
@@ -135,7 +137,8 @@ history.jsonl        # 保留：每次操作的记录（阶段、提交、恢复
 ```
 
 以 `.omg.` 开头的都是临时产物。正常结束的操作会把记录追加到 history.jsonl，并删除 pending。
-Obsidian 被强制退出时可能留下残留。插件**启动时**会自动清理：把残留的 pending 以 `outcome: "interrupted"` 归档到 history.jsonl，删除所有 `.omg.*`，执行 `git worktree prune`；并且由于残留 pending 说明上次是插件自己的 Git 进程被杀，还会删除仓库的 `index.lock`。没有残留 pending 时，不会动用户的锁。
+Obsidian 被强制退出时可能留下残留。插件**启动时**会自动清理：把残留的 pending 以 `outcome: "interrupted"` 归档到 history.jsonl，删除所有 `.omg.*`，执行 `git worktree prune`。
+插件**从不删除** `index.lock`：残留 pending 只能说明上次同步中断了，不能说明锁是谁的（可能是你之后启动的 Git，比如正在编辑提交信息的 `git commit`）。如果有残留 pending，同时 `index.lock` 存在，会显示阻塞的 ×（`repo`），提示锁文件路径；请确认没有 Git 进程在运行后手动删除，再点重试。
 如果在把合并结果应用到 Vault 的途中被打断，下次快照会把已经应用的部分当作本地修改提交，再与远程合并（通常能干净合并）。合并前双方的原始提交都在恢复分支里，不会丢。
 插件重新加载时，如果旧实例的同步仍在执行，新实例的这次同步会失败一次（!），等旧实例结束后恢复正常。
 

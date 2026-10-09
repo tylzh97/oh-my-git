@@ -58,6 +58,10 @@ const ERRORS: Record<ErrorCode, Text> = {
     en: "Repository is not ready for sync; see console",
     zh: "仓库状态不满足同步条件，见控制台",
   },
+  unfinished: {
+    en: "A Git merge/cherry-pick/revert/rebase is unfinished; sync resumes after you finish or abort it",
+    zh: "仓库有未完成的 Git 操作（merge/cherry-pick/revert/rebase），完成或取消后自动恢复",
+  },
   remote: {
     en: "Cannot reach or authenticate with the remote; see console",
     zh: "无法连接远程或认证失败，见控制台",

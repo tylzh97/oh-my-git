@@ -125,6 +125,12 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('remote'); };
   await r.sync('onCron'); assert.equal(r.state, 'warning');
 
+  // 未完成的手动 Git 操作：不阻塞，用户完成后下一次事件自动恢复
+  r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('unfinished', 'MERGE_HEAD exists'); };
+  await r.sync('onSave'); assert.equal(r.state, 'warning'); assert.ok(tooltip.includes('完成或取消后自动恢复'));
+  r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };
+  await r.sync('onSave'); assert.equal(r.state, 'idle');
+
   // 跳过超限文件：同步成功，显示 ! 和文件列表，计数清零，不阻塞
   r.engine.run = async (event, details) => { requests.push({ event, details }); return { skipped: [{ path: 'big.mp4', bytes: 40 * 1024 * 1024 }] }; };
   await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(r.failures, 0);

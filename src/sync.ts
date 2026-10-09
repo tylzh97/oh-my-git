@@ -28,6 +28,9 @@ const PENDING = `${TEMP_PREFIX}pending.json`;
 // 同一 Obsidian 进程内跨插件实例可见：插件重载时旧实例的 run 可能仍在执行
 const RUNNING = Symbol.for("omg-sync.running");
 const shared = globalThis as typeof globalThis & { [RUNNING]?: boolean };
+// 用户手动执行且尚未完成的 Git 操作标记（位于当前 worktree 的 git 目录）
+const UNFINISHED = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"];
+const exists = (file: string): Promise<boolean> => fs.stat(file).then(() => true, () => false);
 
 export class GitSyncEngine {
   private readonly stateDir: string;
@@ -79,14 +82,23 @@ export class GitSyncEngine {
       let record: unknown;
       try { record = { ...JSON.parse(pending), outcome: "interrupted" }; } catch { record = { outcome: "interrupted", raw: pending }; }
       await this.appendHistory(record);
-      // 残留 pending 说明上次是插件自己的 Git 被杀，index.lock 也是插件留下的
-      await fs.rm(path.join(await this.git(["rev-parse", "--absolute-git-dir"]), "index.lock"), { force: true });
       this.log("Previous sync was interrupted; cleaned up", record);
     }
     for (const name of await fs.readdir(this.stateDir)) {
       if (name.startsWith(TEMP_PREFIX)) await fs.rm(path.join(this.stateDir, name), { recursive: true, force: true });
     }
     await this.tryGit(["worktree", "prune"]);
+    // 无法确认锁的归属（可能是用户之后启动的 Git，例如正在编辑提交信息的 git commit），不删除，交给用户确认
+    const lock = path.join(await this.git(["rev-parse", "--absolute-git-dir"]), "index.lock");
+    if (pending && await exists(lock)) throw new SyncError("repo", `${lock} exists after an interrupted sync; remove it if no Git process is running, then retry`);
+  }
+  // 未完成的 merge/cherry-pick/revert/rebase 中，add -A 会把冲突文件当作已解决提交并推送；在修改仓库前停下
+  private async checkUnfinished(): Promise<void> {
+    const gitDir = await this.git(["rev-parse", "--absolute-git-dir"]);
+    for (const marker of UNFINISHED) {
+      if (await exists(path.join(gitDir, marker))) throw new SyncError("unfinished", `Unfinished Git operation: ${marker} exists`);
+    }
+    if (await this.git(["ls-files", "-u"])) throw new SyncError("unfinished", "Index has unmerged files");
   }
   private async loadContext(): Promise<Context> {
     const branch = await this.tryGit(["symbolic-ref", "--quiet", "--short", "HEAD"]);
@@ -279,6 +291,8 @@ export class GitSyncEngine {
       await fs.mkdir(this.stateDir, { recursive: true });
       if (event === "onLoad") await this.cleanup();
       this.device = await this.loadDevice();
+      // 先于分支检查：rebase 期间 HEAD 分离，应报可自动恢复的 unfinished 而非阻塞的 repo
+      await this.checkUnfinished();
       this.context = await this.loadContext();
       this.journal = {
         operationId: `${new Date().toISOString().replace(/[-:.]/g, "")}-${this.device}-${randomBytes(4).toString("hex")}`,
