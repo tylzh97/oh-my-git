@@ -5,7 +5,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-export type SyncEvent = "onClick" | "onLoad" | "onOpen" | "onSave" | "onClose" | "onCron" | "onResolve" | "onRetry";
+export type SyncEvent = "onClick" | "onLoad" | "onOpen" | "onSave" | "onClose" | "onRename" | "onCron" | "onResolve" | "onRetry";
 export type Strategy = "local" | "remote";
 export interface SyncDetails { path?: string | null; source?: string; strategy?: Strategy; reason?: string }
 interface Context { branch: string; remote: string; remoteRef: string; upstream: string }

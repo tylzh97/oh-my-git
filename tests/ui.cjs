@@ -47,16 +47,16 @@ function plugin() {
   return p;
 }
 function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plugins/renamed' }) {
-  const p = new Plugin(); p.manifest = manifest;
+  const p = new Plugin(); p.manifest = manifest; p.vaultEvents = {};
   p.app = {
-    vault: { adapter, configDir: '.custom', on() { return {}; } },
+    vault: { adapter, configDir: '.custom', on(name, fn) { p.vaultEvents[name] = fn; return {}; } },
     workspace: { on() { return {}; }, onLayoutReady(fn) { fn(); }, iterateAllLeaves() {} },
   };
   p.addStatusBarItem = () => button;
   p.registerEvent = p.registerInterval = () => {};
   p.registerDomEvent = (target, type, fn) => { if (target === context.document && type === 'keydown') p.saveKey = fn; };
   // Test initialization without launching Git against an actual Vault.
-  p.trigger = event => requests.push({ event });
+  p.trigger = (event, details) => requests.push({ event, details });
   return p;
 }
 
@@ -133,6 +133,9 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   assert.equal(configPath, '.custom/plugins/renamed/config.jsonc'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
   cron(); assert.equal(requests.at(-1).event, 'onCron');
+  loaded.vaultEvents.rename({ path: 'new.md' }, 'old.md');
+  assert.equal(requests.at(-1).event, 'onRename'); assert.equal(requests.at(-1).details.path, 'new.md');
+  assert.equal(requests.at(-1).details.source, 'vault:rename from old.md');
 
   // Ctrl/Cmd+S 安慰剂：只改状态栏，不调用 engine；! 和 × 下不响应；真实同步可接管
   loaded.config = { ...loaded.config, successDisplayMs: 200 };
@@ -159,6 +162,6 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS save debounce, Ctrl/Cmd+S placebo, warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

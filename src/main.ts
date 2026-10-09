@@ -156,6 +156,8 @@ export default class CustomGitSyncPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => this.trigger("onCron"), this.config.syncIntervalSeconds * 1000));
     this.registerEvent(this.app.workspace.on("file-open", file => this.trigger("onOpen", { path: file?.path ?? null, source: "workspace:file-open" })));
     this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.scheduleSave(file.path); }));
+    // 改名立即单独提交，不走防抖：避免与后续编辑合并，保证 git log --follow 可追溯
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.trigger("onRename", { path: file.path, source: `vault:rename from ${oldPath}` })));
     // 不拦截按键，Obsidian 自己的保存照常执行
     this.registerDomEvent(document, "keydown", (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !event.repeat) this.placebo();

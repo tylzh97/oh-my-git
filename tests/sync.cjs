@@ -38,7 +38,13 @@ async function basics() {
  assert.equal(metadata(f.remote,'main').event,'onSave');
  const clone=path.join(f.base,'lfs-verify');git(f.base,'clone',f.remote,clone);setup(clone);git(clone,'lfs','pull');
  assert.deepEqual(await fs.readFile(path.join(clone,'photo.PNG')),Buffer.from([137,80,78,71,0,1,2,3,4]));
- console.log('PASS startup, snapshots, renames/deletions, monthly immutability, LFS roundtrip');
+ // 改名单独提交为 100% 相似度的重命名；随后大幅改写仍可 --follow 追溯
+ await write(f.local,'draft.md','alpha\nbeta\ngamma\n');await run(f,'onSave');const created=git(f.local,'rev-parse','HEAD');
+ await fs.rename(path.join(f.local,'draft.md'),path.join(f.local,'final.md'));await run(f,'onRename');
+ assert.match(git(f.local,'diff-tree','-M','--name-status','HEAD~1','HEAD'),/^R100\tdraft\.md\tfinal\.md$/m);
+ await write(f.local,'final.md','completely rewritten\n');await run(f,'onSave');
+ assert.ok(git(f.local,'log','--follow','--format=%H','--','final.md').split('\n').includes(created));
+ console.log('PASS startup, snapshots, renames/deletions, rename traceability, monthly immutability, LFS roundtrip');
 
  await remoteCommit(f,'remote.md','remote\n');await write(f.local,'local.md','local\n');await run(f,'onLoad');
  assert.equal(await read(f.local,'remote.md'),'remote\n');assertMerged(f);
