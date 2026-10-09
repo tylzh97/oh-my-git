@@ -1,7 +1,7 @@
 {
   "id": "custom-git-sync",
   "name": "Custom Git Sync",
-  "version": "0.3.0",
+  "version": "0.0.1",
   "minAppVersion": "1.8.7",
   "description": "System Git synchronization with safe merges, recoverable snapshots, Git LFS and a 30 MiB commit guard.",
   "author": "Birkhoff",
