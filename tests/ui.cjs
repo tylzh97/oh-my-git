@@ -130,7 +130,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   const adapter = new FileSystemAdapter(); adapter.exists = async file => { configPath = file; return true; };
   adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1}';
   const loaded = startup(adapter); await loaded.onload();
-  assert.equal(configPath, '.custom/plugins/renamed/config.json'); assert.equal(intervalMs, 10000);
+  assert.equal(configPath, '.custom/plugins/renamed/config.jsonc'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
   cron(); assert.equal(requests.at(-1).event, 'onCron');
 
@@ -153,7 +153,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
 
   adapter.read = async () => '{';
   const bad = startup(adapter); const beforeBad = requests.length; await bad.onload();
-  assert.equal(bad.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('config.json'));
+  assert.equal(bad.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('config.jsonc'));
   assert.equal(bad.engine, undefined); bad.activate(); assert.equal(requests.length, beforeBad); bad.onunload();
   let finishReading;
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });

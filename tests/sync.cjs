@@ -120,7 +120,7 @@ async function monthly() {
 async function main() {
  root=await fs.mkdtemp(path.join(os.tmpdir(),'ogit-integration-'));
  const bundle=path.join(root,'engine.cjs');
- await build({stdin:{contents:"export * from './src/sync'; export * from './src/config';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',outfile:bundle});
+ await build({stdin:{contents:"export * from './src/sync'; export * from './src/config';",resolveDir:process.cwd()},bundle:true,platform:'node',format:'cjs',loader:{'.jsonc':'text'},outfile:bundle});
  ({GitSyncEngine:Engine,DEFAULT_CONFIG}=require(bundle));
  console.log('Isolated fixtures:',root);
  await basics();

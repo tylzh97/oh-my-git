@@ -1,0 +1,27 @@
+// Custom Git Sync 配置。允许 // 和 /* */ 注释及尾随逗号；省略的字段使用内置默认值。
+// 修改后在 Obsidian 中禁用再启用插件生效。
+{
+  // 定时同步（onCron）间隔，秒
+  "syncIntervalSeconds": 300,
+  // 最后一次保存后静默多少秒才触发 onSave
+  "saveDebounceSeconds": 30,
+  // 单条 Git 命令超时，秒
+  "gitTimeoutSeconds": 120,
+  // 插件提交的单文件上限，MiB；超过时显示 × 并停止提交
+  "maxFileMiB": 30,
+  // 成功 √ 的显示时长，毫秒
+  "successDisplayMs": 1000,
+  // 是否在每月首次成功推送后创建 ogit/monthly/ 备份分支
+  "monthlyBackupEnabled": true,
+  // 使用 Git LFS 跟踪的扩展名：不含点，大小写不敏感
+  "lfsExtensions": [
+    // 图片
+    "png", "jpg", "jpeg", "gif", "webp", "avif", "bmp", "ico", "tif", "tiff", "heic", "psd", "ai",
+    // 文档
+    "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "odt", "ods", "odp",
+    // 音视频
+    "mp3", "wav", "flac", "ogg", "m4a", "aac", "mp4", "mov", "mkv", "avi", "webm",
+    // 压缩包、电子书、字体、可执行文件
+    "zip", "7z", "rar", "gz", "bz2", "xz", "tar", "epub", "woff", "woff2", "ttf", "otf", "exe", "dll",
+  ],
+}

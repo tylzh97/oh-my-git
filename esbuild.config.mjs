@@ -11,8 +11,9 @@ await build({
   external: ["obsidian"],
   format: "cjs",
   target: "es2018",
+  loader: { ".jsonc": "text" },
   outfile: "dist/main.js",
   logLevel: "info"
 });
 
-for (const file of ["manifest.json", "config.json", "scripts/read-record.cjs"]) await cp(file, `dist/${file}`);
+for (const file of ["manifest.json", "config.jsonc", "scripts/read-record.cjs"]) await cp(file, `dist/${file}`);

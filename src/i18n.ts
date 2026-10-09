@@ -47,8 +47,8 @@ const UI = {
 // 键由 ErrorCode 约束：新增错误码而未写文案时编译报错
 const ERRORS: Record<ErrorCode, Text> = {
   config: {
-    en: "Cannot read config.json",
-    zh: "config.json 无法读取",
+    en: "Cannot read config.jsonc",
+    zh: "config.jsonc 无法读取",
   },
   repo: {
     en: "Repository is not ready for sync; see console",
