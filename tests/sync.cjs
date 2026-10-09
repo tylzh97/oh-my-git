@@ -80,33 +80,63 @@ async function conflicts() {
  console.log('PASS unrelated histories need explicit choice, existing merges preserved');
 }
 
+async function stateDir(f) { const base=path.join(f.base,'state');return path.join(base,(await fs.readdir(base))[0]); }
+async function history(f) { return (await fs.readFile(path.join(await stateDir(f),'history.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)); }
+
 async function failures() {
  const n=await fixture('no-upstream');git(n.local,'branch','--unset-upstream');await expectCode(()=>run(n),'repo');
- const a=await fixture('auth');await run(a);await hook(a.remote,'pre-receive','#!/bin/sh\nexit 1\n');await write(a.local,'x.md','x\n');
- await assert.rejects(()=>run(a,'onSave'),e=>e.code==='auth'&&e.message.includes('hook declined'));
- console.log('PASS missing upstream and remote rejection stop with stderr');
+ // hook 拒绝：porcelain 中有 ! 行且远程未分叉 → refused
+ const a=await fixture('refused');await run(a);await hook(a.remote,'pre-receive','#!/bin/sh\nexit 1\n');await write(a.local,'x.md','x\n');
+ await assert.rejects(()=>run(a,'onSave'),e=>e.code==='refused'&&e.message.includes('hook declined'));
+ // 无法与远程通信：没有 ! 行 → remote；本地快照仍已提交
+ const u=await fixture('unreachable');await run(u);git(u.local,'remote','set-url','origin',path.join(u.base,'missing.git'));
+ await write(u.local,'offline.md','offline\n');await expectCode(()=>run(u,'onSave'),'remote');
+ assert.equal(git(u.local,'show','HEAD:offline.md'),'offline');await expectCode(()=>run(u,'onLoad'),'remote');
+ console.log('PASS missing upstream, refused push, unreachable remote keeps local snapshots');
 
- // 同步期间写入的未跟踪文件会被 read-tree 拒绝覆盖；apply 阶段失败保留 pending.json
+ // 同步期间写入的未跟踪文件会被 read-tree 拒绝覆盖；失败不留下 pending，不阻塞后续同步
  let edited=false;const r=await fixture('concurrent-edit',DEFAULT_CONFIG,(event,details)=>{
    if(!edited&&details?.phase==='apply'){edited=true;require('node:fs').writeFileSync(path.join(r.local,'remote.md'),'edited during sync\n')}
  });
  await run(r);await remoteCommit(r,'remote.md','remote\n');await write(r.local,'local.md','local\n');
  await expectCode(()=>run(r),'failed');assert.equal(await read(r.local,'remote.md'),'edited during sync\n');
- await expectCode(()=>run(r),'interrupted');
- console.log('PASS concurrent edit is never overwritten, apply failure requires manual audit');
+ assert.deepEqual((await fs.readdir(await stateDir(r))).filter(name=>name.startsWith('.omg.')),[]);
+ const last=(await history(r)).at(-1);assert.equal(last.outcome,'error');assert.equal(last.phase,'apply');
+ console.log('PASS concurrent edit is never overwritten, apply failure leaves no pending state');
+
+ // 启动时清理强制退出的残留：pending 归档为 interrupted，.omg.* 和插件留下的 index.lock 被删除
+ const c=await fixture('cleanup');await run(c);const dir=await stateDir(c),lock=path.join(c.local,'.git','index.lock');
+ await fs.writeFile(lock,'');await write(c.local,'locked.md','locked\n');
+ await expectCode(()=>run(c,'onSave'),'failed');await expectCode(()=>run(c,'onLoad'),'failed'); // 无残留 pending 时不删用户的锁
+ await fs.writeFile(path.join(dir,'.omg.pending.json'),JSON.stringify({operationId:'killed',phase:'push'}));
+ await fs.mkdir(path.join(dir,'.omg.worktree-stale'));await run(c,'onLoad');
+ assert.equal(git(c.remote,'show','main:locked.md'),'locked');
+ assert.deepEqual((await fs.readdir(dir)).filter(name=>name.startsWith('.omg.')),[]);
+ assert.ok((await history(c)).some(entry=>entry.operationId==='killed'&&entry.outcome==='interrupted'&&entry.phase==='push'));
+ const running=Symbol.for('omg-sync.running');globalThis[running]=true;
+ await assert.rejects(()=>run(c,'onLoad'),e=>e.code==='failed'&&e.message.includes('previous plugin instance'));globalThis[running]=false;
+ console.log('PASS startup cleanup of interrupted state, user locks untouched, previous instance guard');
 }
 
 async function sizes() {
  const config={...DEFAULT_CONFIG,maxFileMiB:1},limit=1024*1024;
  const f=await fixture('size',config);await run(f);
  for(const name of ['中文 空格.md','big.bin','big.png']){
-   await write(f.local,name,Buffer.alloc(limit,65));await run(f,'onSave');
-   await write(f.local,name,Buffer.alloc(limit+1,66));const before=git(f.local,'rev-parse','HEAD');
-   await assert.rejects(()=>run(f,'onSave'),e=>e.code==='size'&&e.files[0].path===name&&e.files[0].bytes===limit+1);
-   assert.equal(git(f.local,'rev-parse','HEAD'),before);assert.equal((await fs.stat(path.join(f.local,name))).size,limit+1);
-   await fs.rm(path.join(f.local,name));await run(f,'onSave');
+   await write(f.local,name,Buffer.alloc(limit,65));assert.deepEqual((await run(f,'onSave')).skipped,[]);
+   // 修改为超限：该文件跳过，其余内容照常提交推送
+   await write(f.local,name,Buffer.alloc(limit+1,66));await write(f.local,'small.md',name);
+   assert.deepEqual((await run(f,'onSave')).skipped,[{path:name,bytes:limit+1}]);
+   assert.equal(git(f.remote,'show','main:small.md'),name);assert.equal(git(f.local,'diff','--name-only','-z','--',name),`${name}\0`);assert.equal(git(f.local,'diff','--cached','--name-only'),'');
+   await fs.rm(path.join(f.local,name));assert.deepEqual((await run(f,'onSave')).skipped,[]);
  }
- console.log('PASS size boundary for ordinary and LFS files, data retained');
+ await write(f.local,'new-big.md',Buffer.alloc(limit+1,67));assert.equal((await run(f,'onSave')).skipped[0].path,'new-big.md');
+ assert.equal(git(f.local,'status','--porcelain','--','new-big.md'),'?? new-big.md');await fs.rm(path.join(f.local,'new-big.md'));
+ // 远程已有的大文件（终端提交）不受限制，启动合并照常完成；本地再修改时才受限
+ git(f.peer,'pull','--ff-only');await write(f.peer,'remote-big.bin',Buffer.alloc(limit+5,68));git(f.peer,'add','remote-big.bin');git(f.peer,'commit','-m','test: big');git(f.peer,'push');
+ await write(f.local,'local.md','local\n');assert.deepEqual((await run(f,'onLoad')).skipped,[]);assertMerged(f);
+ assert.equal((await fs.stat(path.join(f.local,'remote-big.bin'))).size,limit+5);
+ await write(f.local,'remote-big.bin',Buffer.alloc(limit+6,69));assert.equal((await run(f,'onSave')).skipped[0].path,'remote-big.bin');
+ console.log('PASS oversized new/modified files skipped while the rest syncs, remote big files merge freely');
 }
 
 async function monthly() {

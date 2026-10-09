@@ -30,6 +30,10 @@ const UI = {
     en: "Fix the problem and reload the plugin",
     zh: "处理问题后重新启用插件",
   },
+  repeated: {
+    en: "Failed repeatedly; sync keeps trying",
+    zh: "连续多次失败，同步仍在继续尝试",
+  },
   retry: {
     en: "Retry",
     zh: "重试",
@@ -54,21 +58,21 @@ const ERRORS: Record<ErrorCode, Text> = {
     en: "Repository is not ready for sync; see console",
     zh: "仓库状态不满足同步条件，见控制台",
   },
-  auth: {
-    en: "Remote rejected authentication or permission; see console",
-    zh: "远程认证或权限被拒绝，见控制台",
+  remote: {
+    en: "Cannot reach or authenticate with the remote; see console",
+    zh: "无法连接远程或认证失败，见控制台",
+  },
+  refused: {
+    en: "Remote refused the push (hook, protected branch or permission); see console",
+    zh: "远程拒绝推送（hook、受保护分支或权限），见控制台",
   },
   conflict: {
     en: "History conflict needs a repository-wide choice",
     zh: "历史冲突，需要选择整个仓库的版本",
   },
   size: {
-    en: "A file exceeds the configured limit",
-    zh: "文件超过配置上限",
-  },
-  interrupted: {
-    en: "Previous operation is incomplete; inspect pending.json",
-    zh: "上次操作未完成，请核对 pending.json",
+    en: "Files over the size limit were skipped; everything else is synced",
+    zh: "超过上限的文件已跳过，其余内容已同步",
   },
   failed: {
     en: "Last sync failed; see console",

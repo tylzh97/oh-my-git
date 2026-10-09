@@ -14,6 +14,7 @@
 | gitTimeoutSeconds | 120 | 单条 Git 命令超时，秒 |
 | maxFileMiB | 30 | 插件提交的单文件上限，MiB |
 | successDisplayMs | 1000 | 成功 √ 的显示时长，毫秒 |
+| escalateAfterFailures | 5 | 非阻塞失败连续达到此次数后显示 ×（仍不暂停同步） |
 | monthlyBackupEnabled | true | 是否创建月度备份分支 |
 | lfsExtensions | 见配置文件 | LFS 扩展名，不含点，大小写不敏感 |
 
@@ -53,6 +54,8 @@ dist/              # 构建产物，即分发内容（不入库）
 - Vault 是 Git 仓库，当前分支配置了远程 upstream，且不以 `ogit/` 开头。
 - 配置好 user.name、user.email；认证和签名必须能在非交互环境下完成。
 
+建议在 Vault 的 .gitignore 中忽略 `.obsidian/workspace*.json`：Obsidian 会不停地改写这些文件，多台设备同步时几乎每次都会冲突。
+
 插件不会安装 Git、初始化仓库、设置 upstream，也不会强推工作分支。Vault 的 .gitignore 由用户维护，被忽略的文件不在备份范围内。其他不满足条件的情况由 Git 自身报错，错误信息打印在控制台。
 
 ## 事件
@@ -72,11 +75,15 @@ dist/              # 构建产物，即分发内容（不入库）
 | 同步图标 | 待机，接收事件 |
 | 旋转图标 | 同步中 |
 | 绿色 √ | 成功 |
-| 黄色 ! | 普通失败（网络等），后续事件照常同步 |
-| 红色 × | 需要人工处理，暂停普通事件，从菜单重试 |
+| 黄色 ! | 普通失败或跳过了超限文件，后续事件照常同步 |
+| 红色 × | 需要关注；点击打开菜单「重试」 |
 
-进入 × 的情况：config.jsonc 无法读取、仓库状态不满足（没有 upstream、分离 HEAD）、远程认证/权限/hook 拒绝、历史冲突、文件超过上限、上次操作未完成。其余失败都显示 !。
-历史冲突时，菜单额外提供「保持远程 / 保持本地」。
+失败分两类：
+
+- **阻塞**（立即 ×，暂停普通事件，直到重试成功）：config.jsonc 无法读取（`config`）、仓库状态不满足，例如没有 upstream 或分离 HEAD（`repo`）、远程拒绝推送，例如 hook、受保护分支或权限（`refused`）、历史冲突（`conflict`）。历史冲突时菜单额外提供「保持远程 / 保持本地」。
+- **不阻塞**：无法连接远程或认证失败（`remote`），以及其余失败（`failed`）。先显示 !；**连续 escalateAfterFailures 次**（默认 5）失败后显示 ×，但普通事件仍照常执行，本地快照不会中断。任意一次成功即清零。
+
+错误分类只看 Git 的退出码和结构化输出，不匹配报错文字：push 的 `--porcelain` 输出中有 `!` 开头的行，表示引用被拒绝（再根据远程是否分叉区分 `conflict` 和 `refused`）；没有这类行，说明没能与远程完成通信（`remote`）。网络故障和认证失败无法区分，统一按 `remote` 计数。
 失败时 Git 的原始输出会打印到控制台（Ctrl+Shift+I → Console，`[Custom Git Sync]` 前缀），其中可能包含 remote URL。
 
 ## 数据保护
@@ -85,6 +92,7 @@ dist/              # 构建产物，即分发内容（不入库）
 - 合并在临时 worktree 中进行，冲突不写入 Vault。
 - 用两树 `read-tree -m -u` 应用结果：Git 会拒绝覆盖未提交的修改和未跟踪文件，但**被 .gitignore 忽略的文件可能被覆盖**。Vault 内不使用 reset --hard 或 clean。
 - 日常 push 被拒绝时会 fetch，并在远程已分叉时保护双方，然后进入 ×，不自动整合。
+- 远程不可用时，本地快照照常提交；恢复连接后的下一次同步会一并推送。
 - 保持本地/远程：选择整个 Git 跟踪文件树，以 upstream 为第一父提交；upstream 尚未包含本地历史时，以本地快照为第二父提交。不使用 rebase，不强推。
 
 ## 分支命名
@@ -97,7 +105,8 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 提交大小与 LFS
 
-- 插件发起的每次提交都会检查本次新增/修改文件在工作区的实际大小，超过 maxFileMiB 时显示 × 并列出文件，不提交也不删除任何内容。终端里的手动提交不受此限制。
+- 快照提交前，会检查本次新增或修改的文件在工作区的实际大小（LFS 文件同样按实际大小计算）。超过 maxFileMiB 的文件会被取消暂存、**不入库**，其余内容照常提交和推送，然后显示 ! 并列出被跳过的文件。工作区文件不受影响。之后每次同步都会继续跳过并提醒，直到你把它加入 .gitignore 或删除。
+- 已经在历史中的大文件（例如从远程合并进来，或者在终端手动提交的）不受限制，启动合并照常进行；只有在本地被修改时，新内容才受限。
 - 插件维护 .gitattributes 中的 OGIT LFS 区块，不改动区块外的用户规则。
 - LFS 对象由 `git lfs install --local` 安装的 pre-push hook 上传；不会覆盖用户自定义的 pre-push hook，有冲突时 Git LFS 报错，需要自行整合。
 - 已有历史不重写、不迁移。
@@ -111,8 +120,20 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 操作记录
 
-本机记录位于 Vault 之外的 `%LOCALAPPDATA%/ObsidianCustomGitSync/<仓库ID>/`（非 Windows 为 `~/.local/state/...`），包括 device.txt、state.json、history.jsonl。
-每次操作进行时会写 pending.json，结束后追加到 history.jsonl 并删除 pending.json。若在应用到 Vault 的阶段失败，或进程中途退出，pending.json 会保留下来，之后的同步都显示 ×，直到用户核对 Vault 并手动删除该文件。插件不会自动恢复。
+本机记录位于 Vault 之外的 `%LOCALAPPDATA%/ObsidianCustomGitSync/<仓库ID>/`（非 Windows 为 `~/.local/state/...`）：
+
+```text
+device.txt           # 保留：本机设备 ID
+state.json           # 保留：月度备份进度
+history.jsonl        # 保留：每次操作的记录（阶段、提交、恢复分支、错误码和 Git 输出）
+.omg.pending.json    # 临时：进行中操作的记录
+.omg.worktree-<id>/  # 临时：合并用的 worktree
+```
+
+以 `.omg.` 开头的都是临时产物。正常结束的操作会把记录追加到 history.jsonl，并删除 pending。
+Obsidian 被强制退出时可能留下残留。插件**启动时**会自动清理：把残留的 pending 以 `outcome: "interrupted"` 归档到 history.jsonl，删除所有 `.omg.*`，执行 `git worktree prune`；并且由于残留 pending 说明上次是插件自己的 Git 进程被杀，还会删除仓库的 `index.lock`。没有残留 pending 时，不会动用户的锁。
+如果在把合并结果应用到 Vault 的途中被打断，下次快照会把已经应用的部分当作本地修改提交，再与远程合并（通常能干净合并）。合并前双方的原始提交都在恢复分支里，不会丢。
+插件重新加载时，如果旧实例的同步仍在执行，新实例的这次同步会失败一次（!），等旧实例结束后恢复正常。
 
 ## 开发与验证
 

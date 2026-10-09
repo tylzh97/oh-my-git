@@ -7,6 +7,7 @@ export interface SyncConfig {
   gitTimeoutSeconds: number;
   maxFileMiB: number;
   successDisplayMs: number;
+  escalateAfterFailures: number;
   monthlyBackupEnabled: boolean;
   lfsExtensions: string[];
 }

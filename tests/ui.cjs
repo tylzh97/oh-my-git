@@ -41,6 +41,7 @@ const context = {
 vm.runInNewContext(fs.readFileSync('dist/main.js', 'utf8'), context);
 const Plugin = context.module.exports.default;
 const tick = () => new Promise(resolve => setTimeout(resolve, 0));
+const ok = { skipped: [] };
 function plugin() {
   const p = new Plugin(); p.enabled = true; p.button = button;
   p.config = { ...p.config, successDisplayMs: 0 };
@@ -65,9 +66,9 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   p.engine = { async run(event, details) { requests.push({ event, details }); throw new Error('failure'); } };
   await p.sync('onLoad'); assert.equal(icon, 'triangle-alert'); assert.equal(p.state, 'warning');
   const SyncError = p.failure.constructor;
-  p.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('auth', 'git push: Authentication failed'); } };
+  p.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('refused', 'pre-receive hook declined'); } };
   await p.sync('onLoad'); assert.equal(icon, 'x'); assert.equal(p.state, 'error');
-  assert.ok(tooltip.includes('远程认证或权限被拒绝'));
+  assert.ok(tooltip.includes('远程拒绝推送'));
   const blocked = requests.length;
   for (const event of ['onClick', 'onLoad', 'onOpen', 'onSave', 'onClose', 'onCron']) await p.sync(event);
   assert.equal(requests.length, blocked);
@@ -90,23 +91,43 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   await w.sync('onLoad'); assert.equal(w.state, 'warning'); assert.equal(icon, 'triangle-alert');
   assert.equal(color, 'var(--text-warning)'); assert.ok(tooltip.includes('后续同步正常触发'));
   assert.ok(logs.some(args => args[1]?.message === 'git push: Connection reset'));
-  for (const event of ['onOpen', 'onSave', 'onClose', 'onCron']) {
+  for (const event of ['onOpen', 'onSave', 'onClose']) {
     const count = requests.length;
     await w.sync(event);
     assert.equal(requests.length, count + 1); assert.equal(requests.at(-1).event, event); assert.equal(w.state, 'warning');
   }
-  w.activate(); await tick(); assert.equal(requests.at(-1).event, 'onClick'); assert.equal(w.menu, undefined);
   language = 'en'; w.render(); assert.ok(tooltip.includes('normal sync remains available'));
-  w.engine = { async run(event, details) { requests.push({ event, details }); } };
+  w.activate(); await tick(); assert.equal(requests.at(-1).event, 'onClick'); assert.equal(w.menu, undefined);
+  assert.equal(w.state, 'error'); // 第 5 次连续失败
+  w.engine = { async run(event, details) { requests.push({ event, details }); return ok; } };
   await w.sync('onCron'); assert.equal(w.state, 'idle'); assert.equal(icon, 'refresh-cw');
-  w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('interrupted'); } };
+  w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('repo'); } };
   await w.sync('onCron'); assert.equal(w.state, 'error'); const stopped = requests.length;
   await w.sync('onCron'); assert.equal(requests.length, stopped);
+
+  // 非阻塞失败（remote/failed）连续 5 次显示 ×，但普通事件仍然执行；成功一次清零
+  language = 'zh'; const r = plugin();
+  r.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('remote', 'git fetch: Could not resolve host'); } };
+  for (let i = 1; i <= 4; i++) { await r.sync('onCron'); assert.equal(r.state, 'warning'); }
+  r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('failed'); };
+  await r.sync('onOpen'); assert.equal(r.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('连续多次失败') && tooltip.includes('(5)'));
+  const escalated = requests.length; await r.sync('onSave'); assert.equal(requests.length, escalated + 1); assert.equal(r.state, 'error');
+  r.activate(); assert.deepEqual(r.menu.items.map(item => item.title), ['重试']); r.menu.hide();
+  r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };
+  await r.sync('onCron'); assert.equal(r.state, 'idle'); assert.equal(r.failures, 0);
+  r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('remote'); };
+  await r.sync('onCron'); assert.equal(r.state, 'warning');
+
+  // 跳过超限文件：同步成功，显示 ! 和文件列表，计数清零，不阻塞
+  r.engine.run = async (event, details) => { requests.push({ event, details }); return { skipped: [{ path: 'big.mp4', bytes: 40 * 1024 * 1024 }] }; };
+  await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(r.failures, 0);
+  assert.ok(tooltip.includes('已跳过') && tooltip.includes('big.mp4 (40.00 MiB)'));
+  const sizeCount = requests.length; await r.sync('onSave'); assert.equal(requests.length, sizeCount + 1);
 
   // 连续保存只在静默期满后触发一次；其他同步开始或卸载时取消
   const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
   const d = plugin(); d.config = { ...d.config, saveDebounceSeconds: 0.02 };
-  d.engine = { async run(event, details) { requests.push({ event, details }); } };
+  d.engine = { async run(event, details) { requests.push({ event, details }); return ok; } };
   let count = requests.length;
   d.scheduleSave('a.md'); await sleep(10); d.scheduleSave('b.md'); await sleep(10); d.scheduleSave('c.md');
   await sleep(10); assert.equal(requests.length, count);
@@ -122,7 +143,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   busy.engine = { run(event) { requests.push({ event }); return new Promise(resolve => { complete = resolve; }); } };
   const active = busy.sync('onClick'); const busyCount = requests.length;
   await busy.sync('onCron'); assert.equal(requests.length, busyCount);
-  complete(); await tick(); assert.equal(busy.state, 'success'); assert.equal(icon, 'check');
+  complete(ok); await tick(); assert.equal(busy.state, 'success'); assert.equal(icon, 'check');
   await busy.sync('onRetry'); assert.equal(requests.length, busyCount);
   await active; assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
 
@@ -162,6 +183,6 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

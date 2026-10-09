@@ -1,11 +1,13 @@
 import { FileSystemAdapter, FileView, Menu, Plugin, TFile, setIcon, setTooltip } from "obsidian";
 import { GitSyncEngine, type SyncDetails, type SyncEvent } from "./sync";
-import { SyncError } from "./git";
+import { SyncError, type ErrorCode } from "./git";
 import { DEFAULT_CONFIG, loadConfig, type SyncConfig } from "./config";
 import { errorText, t } from "./i18n";
 
 type SyncState = "idle" | "syncing" | "success" | "warning" | "error";
 const PLACEBO_SPIN_MS = 600;
+// 只有这些错误会暂停普通事件；其余失败不阻塞，本地快照照常进行
+const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict"];
 
 export default class CustomGitSyncPlugin extends Plugin {
   private enabled = false;
@@ -20,12 +22,16 @@ export default class CustomGitSyncPlugin extends Plugin {
   private config: SyncConfig = DEFAULT_CONFIG;
   private saveTimer?: number;
   private placeboTimer?: number;
+  private failures = 0;
+  private blocked(): boolean {
+    return this.state === "error" && !!this.failure && BLOCKING.includes(this.failure.code);
+  }
   private errorLabel(): string {
     const error = this.failure ?? new SyncError("failed");
     const files = error.files?.map(file => `${file.path} (${(file.bytes / 1024 / 1024).toFixed(2)} MiB)`).join("; ");
     const limit = error.code === "size" ? ` (${this.config.maxFileMiB} MiB)` : "";
-    const action = this.state === "warning" ? "warning" : this.engine ? "resolve" : "reload";
-    return `Git Sync: ${errorText(error.code)}${limit}${files ? ` — ${files}` : ""} — ${t(action)}`;
+    const action = this.state === "warning" ? t("warning") : !this.blocked() ? `${t("repeated")} (${this.failures})` : t(this.engine ? "resolve" : "reload");
+    return `Git Sync: ${errorText(error.code)}${limit}${files ? ` — ${files}` : ""} — ${action}`;
   }
   private render(): void {
     if (!this.button) return;
@@ -96,7 +102,7 @@ export default class CustomGitSyncPlugin extends Plugin {
   }
   private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
     if (this.task) { this.log("Sync dropped (busy)", { event }); return; }
-    if (this.state === "error" && event !== "onRetry" && !(event === "onResolve" && details?.strategy && this.failure?.code === "conflict")) {
+    if (this.blocked() && event !== "onRetry" && !(event === "onResolve" && details?.strategy && this.failure?.code === "conflict")) {
       this.log("Sync dropped (error state)", { event }); return;
     }
     if (!this.enabled || !this.button || !this.engine) return;
@@ -109,9 +115,16 @@ export default class CustomGitSyncPlugin extends Plugin {
     const button = this.button;
     this.render(); this.spin();
     try {
-      await this.engine.run(event, details, task.signal);
+      const { skipped } = await this.engine.run(event, details, task.signal);
       if (task.signal.aborted) return;
       this.animation?.cancel(); this.animation = undefined;
+      this.failures = 0;
+      if (skipped.length) {
+        // 同步成功但跳过了超限文件：提示但不阻塞
+        this.failure = new SyncError("size", undefined, skipped); this.state = "warning";
+        this.log("Sync succeeded with oversized files skipped", { event, files: skipped });
+        return;
+      }
       this.state = "success"; this.render();
       this.log("Sync succeeded", { event }); await this.sleep(task.signal);
       this.state = "idle";
@@ -119,8 +132,9 @@ export default class CustomGitSyncPlugin extends Plugin {
       if (task.signal.aborted) { this.state = "idle"; this.log("Sync cancelled", { event }); }
       else {
         this.failure = error instanceof SyncError ? error : new SyncError("failed", String(error));
-        this.state = this.failure.code === "failed" ? "warning" : "error";
-        this.log("Sync failed", { event, code: this.failure.code, message: this.failure.message, files: this.failure.files });
+        if (BLOCKING.includes(this.failure.code)) this.state = "error";
+        else this.state = ++this.failures >= this.config.escalateAfterFailures ? "error" : "warning";
+        this.log("Sync failed", { event, code: this.failure.code, message: this.failure.message, failures: this.failures });
       }
     } finally {
       this.animation?.cancel(); this.animation = undefined;

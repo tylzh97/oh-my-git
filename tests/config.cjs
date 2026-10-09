@@ -11,7 +11,7 @@ const { build } = require('esbuild');
     stdin: { contents: "export * from './src/config'; export * from './src/git';", resolveDir: process.cwd() },
     bundle: true, platform: 'node', format: 'cjs', loader: { '.jsonc': 'text' }, outfile: bundle,
   });
-  const { DEFAULT_CONFIG, parseConfig, parseJsonc, loadConfig, runGit } = require(bundle);
+  const { DEFAULT_CONFIG, parseConfig, parseJsonc, loadConfig, runGit, GitError } = require(bundle);
   assert.deepEqual(parseConfig('{}'), DEFAULT_CONFIG);
   assert.deepEqual(parseConfig(await fs.readFile('config.jsonc', 'utf8')), DEFAULT_CONFIG);
   assert.equal(DEFAULT_CONFIG.syncIntervalSeconds, 300); assert.ok(DEFAULT_CONFIG.lfsExtensions.includes('png'));
@@ -40,10 +40,12 @@ const { build } = require('esbuild');
   adapter.read = async () => '{';
   await assert.rejects(() => loadConfig(adapter, 'plugins/sync'), e => e.code === 'config' && e.message.includes('plugins/sync/config.jsonc'));
 
-  // Git stderr 进入错误信息；认证类失败归为 auth
-  await assert.rejects(() => runGit(['rev-parse', 'HEAD'], base, 5000), e => e.code === 'failed' && /not a git repository/i.test(e.message));
+  // GitError 携带退出码和原始输出，供调用方按结构判断；输出进入 message 便于日志
+  await assert.rejects(() => runGit(['rev-parse', 'HEAD'], base, 5000),
+    e => e instanceof GitError && e.exitCode === 128 && /not a git repository/i.test(e.stderr) && e.message.startsWith('git rev-parse HEAD:'));
   const remote = path.join(base, 'missing.git');
-  await assert.rejects(() => runGit(['ls-remote', remote], base, 5000), e => e.code === 'failed' && e.message.startsWith('git ls-remote'));
-  console.log('PASS JSONC parsing, configuration defaults/overrides/path, Git stderr in errors');
+  await assert.rejects(() => runGit(['ls-remote', remote], base, 5000), e => e instanceof GitError && e.exitCode === 128);
+  await assert.rejects(() => runGit(['merge-base', '--is-ancestor', 'HEAD', 'HEAD'], base, 5000), e => e.exitCode === 128);
+  console.log('PASS JSONC parsing, configuration defaults/overrides/path, GitError exit code and output');
   console.log('Fixtures retained:', base);
 })().catch(error => { console.error(error); process.exitCode = 1; });

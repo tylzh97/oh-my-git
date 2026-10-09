@@ -1,4 +1,4 @@
-import { SyncError, runGit, type ErrorCode, type OversizedFile } from "./git";
+import { GitError, SyncError, runGit, type ErrorCode, type OversizedFile } from "./git";
 import { DEFAULT_CONFIG, type SyncConfig } from "./config";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
@@ -8,19 +8,26 @@ import * as os from "node:os";
 export type SyncEvent = "onClick" | "onLoad" | "onOpen" | "onSave" | "onClose" | "onRename" | "onCron" | "onResolve" | "onRetry";
 export type Strategy = "local" | "remote";
 export interface SyncDetails { path?: string | null; source?: string; strategy?: Strategy; reason?: string }
+export interface SyncResult { skipped: OversizedFile[] }
 interface Context { branch: string; remote: string; remoteRef: string; upstream: string }
 interface RecoveryRefs { localRecoveryRef: string; remoteRecoveryRef: string }
 interface Journal {
   operationId: string; event: SyncEvent; phase: string; branch: string; upstream: string;
   localCommit?: string; remoteCommit?: string; localRecoveryRef?: string; remoteRecoveryRef?: string;
-  resultCommit?: string; temporaryWorktree?: string;
-  outcome: "running" | "success" | "error"; errorCode?: ErrorCode; error?: string;
+  resultCommit?: string; temporaryWorktree?: string; skipped?: OversizedFile[];
+  outcome: "running" | "success" | "error" | "interrupted"; errorCode?: ErrorCode; error?: string;
 }
 
 const ZERO = "0".repeat(40);
 const LFS_BLOCK = /# BEGIN OGIT LFS\r?\n[\s\S]*?# END OGIT LFS(?:\r?\n)?/;
 // 这些事件会 fetch 并整合远程；其余事件只提交和推送
 const FULL_EVENTS: SyncEvent[] = ["onLoad", "onRetry", "onResolve"];
+// 状态目录中以此开头的都是临时产物，启动时可安全删除
+const TEMP_PREFIX = ".omg.";
+const PENDING = `${TEMP_PREFIX}pending.json`;
+// 同一 Obsidian 进程内跨插件实例可见：插件重载时旧实例的 run 可能仍在执行
+const RUNNING = Symbol.for("omg-sync.running");
+const shared = globalThis as typeof globalThis & { [RUNNING]?: boolean };
 
 export class GitSyncEngine {
   private readonly stateDir: string;
@@ -54,10 +61,29 @@ export class GitSyncEngine {
   }
   private async phase(phase: string, extra: Partial<Journal> = {}): Promise<void> {
     Object.assign(this.journal, extra, { phase });
-    await fs.writeFile(path.join(this.stateDir, "pending.json"), JSON.stringify(this.journal, null, 2));
+    await fs.writeFile(path.join(this.stateDir, PENDING), JSON.stringify(this.journal, null, 2));
     this.log("Git phase", { operationId: this.journal.operationId, phase });
   }
+  private async appendHistory(record: unknown): Promise<void> {
+    await fs.appendFile(path.join(this.stateDir, "history.jsonl"), JSON.stringify(record) + "\n");
+  }
 
+  // 启动时清理上次强制退出留下的临时产物；正常结束的 run 不会留下 .omg.*
+  private async cleanup(): Promise<void> {
+    const pending = await fs.readFile(path.join(this.stateDir, PENDING), "utf8").catch(() => "");
+    if (pending) {
+      let record: unknown;
+      try { record = { ...JSON.parse(pending), outcome: "interrupted" }; } catch { record = { outcome: "interrupted", raw: pending }; }
+      await this.appendHistory(record);
+      // 残留 pending 说明上次是插件自己的 Git 被杀，index.lock 也是插件留下的
+      await fs.rm(path.join(await this.git(["rev-parse", "--absolute-git-dir"]), "index.lock"), { force: true });
+      this.log("Previous sync was interrupted; cleaned up", record);
+    }
+    for (const name of await fs.readdir(this.stateDir)) {
+      if (name.startsWith(TEMP_PREFIX)) await fs.rm(path.join(this.stateDir, name), { recursive: true, force: true });
+    }
+    await this.tryGit(["worktree", "prune"]);
+  }
   private async loadContext(): Promise<Context> {
     const branch = await this.tryGit(["symbolic-ref", "--quiet", "--short", "HEAD"]);
     if (!branch || branch.startsWith("ogit/")) throw new SyncError("repo", "HEAD is detached or on an ogit/ backup branch");
@@ -82,7 +108,6 @@ export class GitSyncEngine {
       branch: this.context.branch, upstream: this.context.upstream, ...extra };
   }
   private async commit(title: string, data: Record<string, unknown>, cwd = this.root): Promise<string> {
-    await this.checkSize(cwd);
     const parents = [await this.git(["rev-parse", "HEAD"], cwd)];
     const mergeHead = await this.tryGit(["rev-parse", "--verify", "MERGE_HEAD"], cwd);
     if (mergeHead) parents.push(mergeHead);
@@ -91,16 +116,21 @@ export class GitSyncEngine {
     await this.git(["commit", "--allow-empty", "-F", "-"], cwd, `${title}\n\nOgit-Metadata-Begin\n${record}\nOgit-Metadata-End\n`);
     return this.git(["rev-parse", "HEAD"], cwd);
   }
-  // 只检查本次暂存的新增/修改；工作区是真实文件，LFS 也按实际大小计算
-  private async checkSize(cwd: string): Promise<void> {
+  // 只约束本次快照新引入的内容：新增或修改的超限文件取消暂存，不入库；已在历史中的文件不受影响
+  private async skipOversized(): Promise<OversizedFile[]> {
     const limit = this.config.maxFileMiB * 1024 * 1024;
-    const changed = (await this.git(["diff", "--cached", "--no-renames", "--name-only", "-z", "--diff-filter=ACMT"], cwd)).split("\0").filter(Boolean);
+    const changed = (await this.git(["diff", "--cached", "--no-renames", "--name-only", "-z", "--diff-filter=ACMT"])).split("\0").filter(Boolean);
     const oversized: OversizedFile[] = [];
     for (const name of changed) {
-      const bytes = (await fs.stat(path.join(cwd, name))).size;
+      const bytes = (await fs.stat(path.join(this.root, name))).size;
       if (bytes > limit) oversized.push({ path: name, bytes });
     }
-    if (oversized.length) throw new SyncError("size", `Files exceed ${this.config.maxFileMiB} MiB`, oversized);
+    if (oversized.length) {
+      // 只取消暂存，工作区文件不动
+      await this.git(["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"], this.root,
+        oversized.map(file => file.path).join("\0"));
+    }
+    return oversized;
   }
   // 只维护 OGIT 区块，不动用户自己的规则
   private async ensureAttributes(cwd: string): Promise<void> {
@@ -116,21 +146,32 @@ export class GitSyncEngine {
     await this.git(["add", "--renormalize", "."], cwd);
   }
 
-  private async snapshot(): Promise<string> {
+  private async snapshot(): Promise<{ head: string; skipped: OversizedFile[] }> {
     // 不加 --force：用户自定义的 pre-push hook 不能被静默覆盖
     await this.git(["lfs", "install", "--local"]);
     await this.stageAll(this.root);
+    const skipped = await this.skipOversized();
     if (await this.git(["diff", "--cached", "--name-only"])) {
       const stats = await this.git(["diff", "--cached", "--shortstat"]);
       await this.commit(`ogit: snapshot local changes (${this.journal.event})`, this.metadata("snapshot", { stats }));
     }
-    return this.git(["rev-parse", "HEAD"]);
+    return { head: await this.git(["rev-parse", "HEAD"]), skipped };
   }
   private async fetch(): Promise<string> {
     const c = this.context;
     // 只拉取 upstream，不受用户 fetch refspec 影响
-    await this.git(["fetch", "--no-tags", c.remote, `+${c.remoteRef}:${c.upstream}`]);
+    try { await this.git(["fetch", "--no-tags", c.remote, `+${c.remoteRef}:${c.upstream}`]); }
+    catch (error) { throw error instanceof GitError ? new SyncError("remote", error.message) : error; }
     return this.git(["rev-parse", c.upstream]);
+  }
+  // porcelain 输出中以 ! 开头的行表示该引用被拒绝；没有这类行说明根本没能与远程完成通信（网络、认证等）
+  private async pushRefs(refspecs: string[], options: string[] = []): Promise<void> {
+    try { await this.git(["push", "--porcelain", ...options, this.context.remote, ...refspecs]); }
+    catch (error) {
+      if (!(error instanceof GitError)) throw error;
+      const rejected = error.stdout.split("\n").some(line => line.startsWith("!"));
+      throw new SyncError(rejected ? "refused" : "remote", error.message);
+    }
   }
   // 整合前把双方各推一个不可变恢复分支，推送失败则不继续
   private async protect(reason: string, local: string, remote: string): Promise<RecoveryRefs> {
@@ -139,14 +180,13 @@ export class GitSyncEngine {
     await this.phase("backup", { localCommit: local, remoteCommit: remote, ...refs });
     await this.git(["update-ref", refs.localRecoveryRef, local, ZERO]);
     await this.git(["update-ref", refs.remoteRecoveryRef, remote, ZERO]);
-    await this.git(["push", "--porcelain", this.context.remote,
-      `${refs.localRecoveryRef}:${refs.localRecoveryRef}`, `${refs.remoteRecoveryRef}:${refs.remoteRecoveryRef}`]);
+    await this.pushRefs([`${refs.localRecoveryRef}:${refs.localRecoveryRef}`, `${refs.remoteRecoveryRef}:${refs.remoteRecoveryRef}`]);
     return refs;
   }
 
   private async integrate(local: string, remote: string, strategy?: Strategy, reason?: string): Promise<string> {
     const refs = await this.protect(strategy ? `keep-${strategy}` : "startup-merge", local, remote);
-    const temp = path.join(this.stateDir, `worktree-${randomBytes(6).toString("hex")}`);
+    const temp = path.join(this.stateDir, `${TEMP_PREFIX}worktree-${randomBytes(6).toString("hex")}`);
     await this.phase("merge", { temporaryWorktree: temp });
     await this.git(["worktree", "add", "--detach", temp, strategy ? remote : local]);
     try {
@@ -168,8 +208,13 @@ export class GitSyncEngine {
       await this.git(["merge", "--ff-only", remote], temp);
       return remote;
     }
+    if (!(await this.tryGit(["merge-base", local, remote], temp))) throw new SyncError("conflict", "Local and remote histories are unrelated");
     try { await this.git(["merge", "--no-commit", "--no-ff", remote], temp); }
-    catch (error) { throw new SyncError("conflict", (error as Error).message); }
+    catch (error) {
+      // 退出码 1 且存在未合并条目即为内容冲突
+      if (error instanceof GitError && error.exitCode === 1 && await this.git(["ls-files", "-u"], temp)) throw new SyncError("conflict", error.message);
+      throw error;
+    }
     return this.commit("ogit: merge upstream on startup",
       this.metadata("merge", { localCommit: local, remoteCommit: remote, ...refs }), temp);
   }
@@ -190,9 +235,10 @@ export class GitSyncEngine {
     const c = this.context;
     await this.phase("push", { resultCommit: local });
     try {
-      await this.git(["push", "--porcelain", c.remote, `${local}:${c.remoteRef}`]);
+      await this.pushRefs([`${local}:${c.remoteRef}`]);
     } catch (error) {
-      // 远程已分叉：保护双方，交给用户选择；否则原样抛出
+      if (!(error instanceof SyncError) || error.code !== "refused") throw error;
+      // 被拒绝且远程已分叉：保护双方，交给用户选择；未分叉则是服务端策略拒绝
       const remote = await this.fetch();
       if (await this.isAncestor(remote, local)) throw error;
       await this.protect("push-rejected", local, remote);
@@ -213,7 +259,7 @@ export class GitSyncEngine {
     try {
       if (!(await this.git(["ls-remote", "--refs", c.remote, ref]))) {
         // 空 lease 表示只创建，不允许覆盖其他设备已创建的分支
-        await this.git(["push", "--porcelain", `--force-with-lease=${ref}:`, c.remote, `${commit}:${ref}`]);
+        await this.pushRefs([`${commit}:${ref}`], [`--force-with-lease=${ref}:`]);
       }
       await fs.writeFile(statePath, JSON.stringify({ ...state, monthly: ref }));
     } catch (error) {
@@ -221,21 +267,30 @@ export class GitSyncEngine {
     }
   }
 
-  async run(event: SyncEvent, details: SyncDetails | undefined, signal: AbortSignal): Promise<void> {
-    this.signal = signal;
-    await fs.mkdir(this.stateDir, { recursive: true });
-    const pendingPath = path.join(this.stateDir, "pending.json");
-    if (await fs.stat(pendingPath).then(() => true, () => false)) throw new SyncError("interrupted", `Inspect and remove ${pendingPath}`);
-    this.device = await this.loadDevice();
-    this.context = await this.loadContext();
-    this.journal = {
-      operationId: `${new Date().toISOString().replace(/[-:.]/g, "")}-${this.device}-${randomBytes(4).toString("hex")}`,
-      event, phase: "start", outcome: "running", branch: this.context.branch, upstream: this.context.upstream,
-    };
+  async run(event: SyncEvent, details: SyncDetails | undefined, signal: AbortSignal): Promise<SyncResult> {
+    if (shared[RUNNING]) throw new SyncError("failed", "A sync from a previous plugin instance is still running");
+    shared[RUNNING] = true;
+    try {
+      this.signal = signal;
+      await fs.mkdir(this.stateDir, { recursive: true });
+      if (event === "onLoad") await this.cleanup();
+      this.device = await this.loadDevice();
+      this.context = await this.loadContext();
+      this.journal = {
+        operationId: `${new Date().toISOString().replace(/[-:.]/g, "")}-${this.device}-${randomBytes(4).toString("hex")}`,
+        event, phase: "start", outcome: "running", branch: this.context.branch, upstream: this.context.upstream,
+      };
+      return await this.execute(event, details);
+    } finally {
+      shared[RUNNING] = false;
+    }
+  }
+  private async execute(event: SyncEvent, details: SyncDetails | undefined): Promise<SyncResult> {
     try {
       await this.phase("snapshot");
-      let local = await this.snapshot();
-      await this.phase("snapshotted", { localCommit: local });
+      const snapshot = await this.snapshot();
+      let local = snapshot.head;
+      await this.phase("snapshotted", { localCommit: local, skipped: snapshot.skipped });
       if (FULL_EVENTS.includes(event)) {
         const remote = await this.fetch();
         await this.phase("fetched", { remoteCommit: remote });
@@ -245,18 +300,14 @@ export class GitSyncEngine {
       await this.push(local);
       await this.monthly(local);
       this.journal.outcome = "success";
+      return { skipped: snapshot.skipped };
     } catch (error) {
-      const failure = error instanceof SyncError ? error : new SyncError("failed", String(error));
+      const failure = error instanceof SyncError ? error : new SyncError("failed", (error as Error).message);
       Object.assign(this.journal, { outcome: "error", errorCode: failure.code, error: failure.message });
       throw failure;
     } finally {
-      // apply 阶段失败时 Vault 状态不确定：保留 pending.json，阻止后续同步直到人工核对
-      if (this.journal.outcome === "error" && this.journal.phase === "apply") {
-        await fs.writeFile(pendingPath, JSON.stringify(this.journal, null, 2));
-      } else {
-        await fs.appendFile(path.join(this.stateDir, "history.jsonl"), JSON.stringify(this.journal) + "\n");
-        await fs.rm(pendingPath, { force: true });
-      }
+      await this.appendHistory(this.journal);
+      await fs.rm(path.join(this.stateDir, PENDING), { force: true });
     }
   }
 }

@@ -1,17 +1,21 @@
 import { execFile } from "node:child_process";
 
-// failed 为普通失败（!，后续事件照常触发），其余均需人工处理（×）
-export type ErrorCode = "config" | "repo" | "auth" | "conflict" | "size" | "interrupted" | "failed";
+export type ErrorCode = "config" | "repo" | "remote" | "refused" | "conflict" | "size" | "failed";
 export interface OversizedFile { path: string; bytes: number }
 
+// 同步层面的错误：code 决定 UI 表现，message 仅用于显示和日志
 export class SyncError extends Error {
   constructor(readonly code: ErrorCode, detail?: string, readonly files?: OversizedFile[]) {
     super(detail ?? code);
   }
 }
 
-// 认证、权限、证书或远程 hook 拒绝：重试无意义，必须停下
-const AUTH = /authentication|could not read (?:username|password)|permission denied|access denied|unauthori[sz]ed|forbidden|certificate|publickey|host key verification|hook declined|protected branch|(?:HTTP|error|status(?: code)?)[ :]*(?:401|403)\b/i;
+// Git 原始失败：调用方依据退出码和结构化输出判断含义，不匹配报错文字
+export class GitError extends Error {
+  constructor(readonly args: string[], readonly exitCode: number | null, readonly stdout: string, readonly stderr: string) {
+    super(`git ${args.join(" ")}: ${(stdout + stderr).trim() || `exit ${exitCode}`}`);
+  }
+}
 
 export function runGit(args: string[], cwd: string, timeoutMs: number, input?: string): Promise<string> {
   // 显式开启 smudge，避免用户环境变量让 Vault 中出现 LFS 指针
@@ -21,8 +25,7 @@ export function runGit(args: string[], cwd: string, timeoutMs: number, input?: s
       cwd, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, encoding: "utf8", windowsHide: true,
     }, (error, stdout, stderr) => {
       if (!error) return resolve(stdout.trimEnd());
-      const output = (stdout + stderr).trim() || error.message;
-      reject(new SyncError(AUTH.test(output) ? "auth" : "failed", `git ${args.join(" ")}: ${output}`));
+      reject(new GitError(args, typeof error.code === "number" ? error.code : null, stdout, stderr));
     });
     if (input !== undefined) child.stdin?.end(input);
   });

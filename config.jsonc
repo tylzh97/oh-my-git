@@ -7,10 +7,12 @@
   "saveDebounceSeconds": 30,
   // 单条 Git 命令超时，秒
   "gitTimeoutSeconds": 120,
-  // 插件提交的单文件上限，MiB；超过时显示 × 并停止提交
+  // 快照中新增或修改文件的大小上限，MiB；超限文件不入库，其余照常同步并显示 !
   "maxFileMiB": 30,
   // 成功 √ 的显示时长，毫秒
   "successDisplayMs": 1000,
+  // 非阻塞失败（网络、认证等）连续达到此次数后显示 ×，仍不暂停同步；任一次成功清零
+  "escalateAfterFailures": 5,
   // 是否在每月首次成功推送后创建 ogit/monthly/ 备份分支
   "monthlyBackupEnabled": true,
   // 使用 Git LFS 跟踪的扩展名：不含点，大小写不敏感
