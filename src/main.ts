@@ -17,6 +17,7 @@ export default class CustomGitSyncPlugin extends Plugin {
   private engine?: GitSyncEngine;
   private failure?: SyncError;
   private config: SyncConfig = DEFAULT_CONFIG;
+  private saveTimer?: number;
   private errorLabel(): string {
     const error = this.failure ?? new SyncError("failed");
     const files = error.files?.map(file => `${file.path} (${(file.bytes / 1024 / 1024).toFixed(2)} MiB)`).join("; ");
@@ -61,6 +62,14 @@ export default class CustomGitSyncPlugin extends Plugin {
     if (details === undefined) console.log(message); else console.log(message, details);
   }
   private trigger(event: SyncEvent, details?: SyncDetails): void { this.log(event, details); void this.sync(event, details); }
+  // modify 只重置计时器，静默期满后才触发一次 onSave
+  private scheduleSave(path: string): void {
+    window.clearTimeout(this.saveTimer);
+    this.saveTimer = window.setTimeout(() => {
+      this.saveTimer = undefined;
+      this.trigger("onSave", { path, source: "vault:modify" });
+    }, this.config.saveDebounceSeconds * 1000);
+  }
   private sleep(signal: AbortSignal): Promise<void> {
     return new Promise(resolve => {
       const done = (): void => { window.clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
@@ -75,6 +84,8 @@ export default class CustomGitSyncPlugin extends Plugin {
     }
     if (!this.enabled || !this.button || !this.engine) return;
     const task = new AbortController(); this.task = task;
+    // 本次同步提交整个仓库，已包含待同步的保存
+    window.clearTimeout(this.saveTimer); this.saveTimer = undefined;
     this.menu?.hide(); this.state = "syncing"; this.failure = undefined;
     const button = this.button;
     this.render();
@@ -127,7 +138,7 @@ export default class CustomGitSyncPlugin extends Plugin {
     }
     this.registerInterval(window.setInterval(() => this.trigger("onCron"), this.config.syncIntervalSeconds * 1000));
     this.registerEvent(this.app.workspace.on("file-open", file => this.trigger("onOpen", { path: file?.path ?? null, source: "workspace:file-open" })));
-    this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.trigger("onSave", { path: file.path, source: "vault:modify" }); }));
+    this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.scheduleSave(file.path); }));
     this.app.workspace.onLayoutReady(() => {
       if (!this.enabled) return;
       this.openFiles = this.collectOpenFiles();
@@ -140,7 +151,7 @@ export default class CustomGitSyncPlugin extends Plugin {
     this.trigger("onLoad");
   }
   onunload(): void {
-    this.log("onUnload"); this.enabled = false; this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
+    this.log("onUnload"); this.enabled = false; window.clearTimeout(this.saveTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
     this.openFiles.clear(); this.button = undefined;
   }
 }

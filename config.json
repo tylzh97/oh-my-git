@@ -1,5 +1,6 @@
 {
   "syncIntervalSeconds": 300,
+  "saveDebounceSeconds": 30,
   "gitTimeoutSeconds": 120,
   "maxFileMiB": 30,
   "successDisplayMs": 1000,

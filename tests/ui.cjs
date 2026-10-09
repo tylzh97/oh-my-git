@@ -102,6 +102,20 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   await w.sync('onCron'); assert.equal(w.state, 'error'); const stopped = requests.length;
   await w.sync('onCron'); assert.equal(requests.length, stopped);
 
+  // 连续保存只在静默期满后触发一次；其他同步开始或卸载时取消
+  const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+  const d = plugin(); d.config = { ...d.config, saveDebounceSeconds: 0.02 };
+  d.engine = { async run(event, details) { requests.push({ event, details }); } };
+  let count = requests.length;
+  d.scheduleSave('a.md'); await sleep(10); d.scheduleSave('b.md'); await sleep(10); d.scheduleSave('c.md');
+  await sleep(10); assert.equal(requests.length, count);
+  await sleep(40); assert.equal(requests.length, count + 1);
+  assert.equal(requests.at(-1).event, 'onSave'); assert.equal(requests.at(-1).details.path, 'c.md');
+  await sleep(10); count = requests.length;
+  d.scheduleSave('d.md'); await d.sync('onClick'); await sleep(40);
+  assert.equal(requests.length, count + 1); assert.equal(requests.at(-1).event, 'onClick');
+  d.scheduleSave('e.md'); d.onunload(); await sleep(40); assert.equal(requests.length, count + 1);
+
   const busy = plugin(); busy.config = { ...busy.config, successDisplayMs: 30 };
   let complete;
   busy.engine = { run(event) { requests.push({ event }); return new Promise(resolve => { complete = resolve; }); } };
@@ -129,6 +143,6 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS save debounce, warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
