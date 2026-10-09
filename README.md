@@ -1,4 +1,4 @@
-# Custom Git Sync 0.0.1
+# Oh My Git 0.0.1
 
 仅桌面端，Obsidian >= 1.8.7。UI 跟随 Obsidian 中文/英文设置。
 
@@ -45,9 +45,21 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 安装
 
-执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/custom-git-sync/`，最后在 Obsidian 里启用插件。
+从社区插件市场安装：只会下载 `main.js` 和 `manifest.json`。需要改配置时，从本仓库复制 `config.jsonc` 到 `<Vault>/.obsidian/plugins/oh-my-git/` 再修改；需要审计工具时同样复制 `scripts/read-record.cjs`。
+
+手动安装：执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/oh-my-git/`，最后在 Obsidian 里启用插件。
 其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具。
 源码仓库应放在 Vault 之外，否则源码会被插件同步进笔记仓库。
+
+## 发版
+
+1. 同步修改 `manifest.json`、`package.json` 的 `version`，并在 `versions.json` 中追加 `"<版本>": "<minAppVersion>"`。
+2. `npm test`，提交后推送到 GitHub 默认分支。
+3. 创建 GitHub Release，tag 与 `version` 完全一致（不带 `v`），附件上传 `dist/main.js` 和 `dist/manifest.json`。
+
+## 许可证
+
+[AGPL-3.0-or-later](LICENSE)
 
 ## 前提
 
@@ -69,7 +81,7 @@ dist/              # 构建产物，即分发内容（不入库）
 - Ctrl/Cmd+S 是安慰剂：只在待机时让图标转一下再显示 √，不执行任何 Git 操作，也不拦截 Obsidian 自己的保存。黄色 ! 和红色 × 状态下不响应，以免掩盖故障。真实同步开始时会立即接管状态栏。挂载方式由 placeboMode 决定：
   - `hidden`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原来的保存逻辑，再显示安慰剂。能覆盖快捷键、命令面板，以及用户自定义的保存快捷键。这是**未公开 API**，Obsidian 升级后可能失效；找不到该命令时只记一条日志，安慰剂不生效。插件卸载时恢复原回调。
   - `default`：在 `window` 的捕获阶段监听 Ctrl/Cmd+S（同时识别物理键位 KeyS，兼容输入法），弹出窗口打开时也会注册。只用公开 API，但只覆盖键盘快捷键。Obsidian 的快捷键系统会在 `window` 捕获阶段对保存调用 `stopPropagation`，所以不能监听 `document`。
-  - 排查时，在 Console 中过滤 `Custom Git Sync`，查看 `Placebo hooked save command`、`Save command executed`、`Save shortcut detected`、`Placebo skipped` 这几条日志。
+  - 排查时，在 Console 中过滤 `Oh My Git`，查看 `Placebo hooked save command`、`Save command executed`、`Save shortcut detected`、`Placebo skipped` 这几条日志。
 - onUnload：请求取消，当前 Git 命令执行完后不再启动后续步骤。
 
 同步进行中（包括显示成功 √ 期间）新触发的事件直接丢弃。
@@ -90,7 +102,7 @@ dist/              # 构建产物，即分发内容（不入库）
 `unfinished`：你在终端执行 merge、cherry-pick、revert 或 rebase 且尚未完成时（存在 `MERGE_HEAD` 等标记，或索引里有未合并的文件），插件在修改仓库**之前**就停下，不会把冲突标记当作已解决提交和推送。你完成（`git commit`）或取消（`--abort`）之后，下一次事件会自动恢复同步，不需要点重试。
 
 错误分类只看 Git 的退出码和结构化输出，不匹配报错文字：push 的 `--porcelain` 输出中有 `!` 开头的行，表示引用被拒绝（再根据远程是否分叉区分 `conflict` 和 `refused`）；没有这类行，说明没能与远程完成通信（`remote`）。网络故障和认证失败无法区分，统一按 `remote` 计数。
-失败时 Git 的原始输出会打印到控制台（Ctrl+Shift+I → Console，`[Custom Git Sync]` 前缀），其中可能包含 remote URL。
+失败时 Git 的原始输出会打印到控制台（Ctrl+Shift+I → Console，`[Oh My Git]` 前缀），其中可能包含 remote URL。
 
 ## 数据保护
 
@@ -126,7 +138,7 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 操作记录
 
-本机记录位于 Vault 之外的 `%LOCALAPPDATA%/ObsidianCustomGitSync/<仓库ID>/`（非 Windows 为 `~/.local/state/...`）：
+本机记录位于 Vault 之外的 `%LOCALAPPDATA%/ObsidianOhMyGit/<仓库ID>/`（非 Windows 为 `~/.local/state/...`）：
 
 ```text
 device.txt           # 保留：本机设备 ID

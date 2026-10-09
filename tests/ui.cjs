@@ -47,7 +47,7 @@ function plugin() {
   p.config = { ...p.config, successDisplayMs: 0 };
   return p;
 }
-function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plugins/renamed' }) {
+function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/renamed' }) {
   const p = new Plugin(); p.manifest = manifest; p.vaultEvents = {}; p.workspaceEvents = {}; p.keyTargets = []; p.cleanups = [];
   // 模拟 Obsidian 内部命令表中的保存命令
   p.saveCalls = []; p.saveCommand = { id: 'editor:save-file', checkCallback(checking) { p.saveCalls.push(checking); return true; } };
@@ -196,7 +196,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   await loaded.sync('onCron'); assert.equal(loaded.state, 'warning');
   await sleep(900); assert.equal(loaded.state, 'warning'); assert.equal(icon, 'triangle-alert');
   loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' }); loaded.onunload(); await sleep(900); assert.equal(loaded.state, 'syncing');
-  const fallback = startup(new FileSystemAdapter(), { id: 'custom-git-sync' }); await fallback.onload();
+  const fallback = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); await fallback.onload();
   assert.equal(intervalMs, 300000);
 
   // 方案 B（默认配置 hidden）：包装内部保存命令，不监听按键；checking=true 只是询问，不触发安慰剂
@@ -211,7 +211,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   fallback.state = 'warning'; fallback.saveCommand.checkCallback(false); assert.equal(fallback.state, 'warning'); fallback.state = 'idle';
   fallback.onunload(); fallback.cleanups.forEach(fn => fn());
   assert.equal(fallback.saveCommand.checkCallback.name, 'checkCallback'); // 卸载后恢复原回调
-  const missing = startup(new FileSystemAdapter(), { id: 'custom-git-sync' }); delete missing.app.commands; await missing.onload();
+  const missing = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); delete missing.app.commands; await missing.onload();
   assert.ok(logs.some(args => args[0].includes('Save command not found'))); missing.onunload();
 
   adapter.read = async () => '{';

@@ -41,7 +41,7 @@ export class GitSyncEngine {
   private device = "";
 
   constructor(private readonly root: string, private readonly log: (event: string, details?: unknown) => void,
-    stateBase = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), ".local", "state"), "ObsidianCustomGitSync"),
+    stateBase = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), ".local", "state"), "ObsidianOhMyGit"),
     private readonly config: SyncConfig = DEFAULT_CONFIG) {
     const resolved = path.resolve(root);
     const repoId = createHash("sha256").update(process.platform === "win32" ? resolved.toLowerCase() : resolved).digest("hex").slice(0, 16);

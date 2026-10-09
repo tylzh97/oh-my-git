@@ -1,9 +1,9 @@
 {
   "id": "oh-my-git",
-  "name": "oh-my-git",
+  "name": "Oh My Git",
   "version": "0.0.1",
   "minAppVersion": "1.8.7",
-  "description": "Simplest Git synchronization with recoverable snapshots. ",
+  "description": "Simplest Git synchronization with recoverable snapshots.",
   "author": "Chenghao",
   "isDesktopOnly": true
 }

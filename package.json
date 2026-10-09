@@ -1,7 +1,8 @@
 {
-  "name": "custom-git-sync",
+  "name": "oh-my-git",
   "version": "0.0.1",
   "private": true,
+  "license": "AGPL-3.0-or-later",
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && node esbuild.config.mjs",

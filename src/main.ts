@@ -11,7 +11,7 @@ const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict"];
 const SAVE_CALLBACKS = ["callback", "checkCallback", "editorCallback", "editorCheckCallback"] as const;
 type SaveCommand = Partial<Record<typeof SAVE_CALLBACKS[number], (...args: unknown[]) => unknown>>;
 
-export default class CustomGitSyncPlugin extends Plugin {
+export default class OhMyGitPlugin extends Plugin {
   private enabled = false;
   private openFiles = new Set<string>();
   private button?: HTMLElement;
@@ -70,7 +70,7 @@ export default class CustomGitSyncPlugin extends Plugin {
     const rect = this.button.getBoundingClientRect(); menu.showAtPosition({ x: rect.left, y: rect.top });
   }
   private log(event: string, details?: unknown): void {
-    const message = `[Custom Git Sync] ${event} at ${new Date().toISOString()}`;
+    const message = `[Oh My Git] ${event} at ${new Date().toISOString()}`;
     if (details === undefined) console.log(message); else console.log(message, details);
   }
   private trigger(event: SyncEvent, details?: SyncDetails): void { this.log(event, details); void this.sync(event, details); }
