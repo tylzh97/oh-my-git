@@ -62,47 +62,42 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
 (async () => {
   const p = plugin();
   p.engine = { async run(event, details) { requests.push({ event, details }); throw new Error('failure'); } };
+  await p.sync('onLoad'); assert.equal(icon, 'triangle-alert'); assert.equal(p.state, 'warning');
+  const SyncError = p.failure.constructor;
+  p.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('auth', 'git push: Authentication failed'); } };
   await p.sync('onLoad'); assert.equal(icon, 'x'); assert.equal(p.state, 'error');
-  assert.ok(tooltip.includes('Git 操作失败')); const SyncError = p.failure.constructor;
+  assert.ok(tooltip.includes('远程认证或权限被拒绝'));
+  const blocked = requests.length;
   for (const event of ['onClick', 'onLoad', 'onOpen', 'onSave', 'onClose', 'onCron']) await p.sync(event);
-  assert.equal(requests.length, 1);
+  assert.equal(requests.length, blocked);
   p.activate(); assert.deepEqual(p.menu.items.map(item => item.title), ['重试']);
   p.menu.items[0].click(); await tick(); assert.equal(requests.at(-1).event, 'onRetry');
-  assert.equal(requests.at(-1).details.retryOf, 'onLoad'); assert.equal(p.state, 'error');
+  assert.equal(requests.at(-1).details, undefined); assert.equal(p.state, 'error');
 
   p.state = 'idle';
-  p.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('conflict', { resolvable: true }); } };
+  p.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('conflict'); } };
   await p.sync('onSave'); p.activate();
   assert.deepEqual(p.menu.items.map(item => item.title), ['重试', '保持远程', '保持本地']);
   p.menu.items[1].click(); await tick(); assert.equal(requests.at(-1).details.strategy, 'remote');
   p.activate(); p.menu.items[0].click(); await tick();
-  assert.equal(requests.at(-1).details.retryOf, 'onResolve'); assert.equal(requests.at(-1).details.strategy, 'remote');
+  assert.equal(requests.at(-1).event, 'onRetry'); assert.equal(requests.at(-1).details, undefined);
   language = 'en'; p.activate();
   assert.deepEqual(p.menu.items.map(item => item.title), ['Retry', 'Keep remote', 'Keep local']); p.menu.hide();
 
   language = 'zh'; const w = plugin();
-  w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('network', { transient: true }); } };
+  w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('failed', 'git push: Connection reset'); } };
   await w.sync('onLoad'); assert.equal(w.state, 'warning'); assert.equal(icon, 'triangle-alert');
   assert.equal(color, 'var(--text-warning)'); assert.ok(tooltip.includes('后续同步正常触发'));
-  assert.equal(w.manualRetry, undefined);
+  assert.ok(logs.some(args => args[1]?.message === 'git push: Connection reset'));
   for (const event of ['onOpen', 'onSave', 'onClose', 'onCron']) {
     const count = requests.length;
     await w.sync(event);
-    assert.equal(requests.length, count + 1);
-    assert.equal(requests.at(-1).event, event); assert.equal(requests.at(-1).details, undefined);
-    assert.equal(w.state, 'warning'); assert.equal(w.manualRetry, undefined);
+    assert.equal(requests.length, count + 1); assert.equal(requests.at(-1).event, event); assert.equal(w.state, 'warning');
   }
   w.activate(); await tick(); assert.equal(requests.at(-1).event, 'onClick'); assert.equal(w.menu, undefined);
-  assert.equal(requests.at(-1).details, undefined);
   language = 'en'; w.render(); assert.ok(tooltip.includes('normal sync remains available'));
   w.engine = { async run(event, details) { requests.push({ event, details }); } };
   await w.sync('onCron'); assert.equal(w.state, 'idle'); assert.equal(icon, 'refresh-cw');
-
-  // A warning must not retain a previous resolution or startup task.
-  w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('backup', { transient: true }); } };
-  await w.sync('onResolve', { strategy: 'local', reason: 'conflict' }); await w.sync('onCron');
-  assert.equal(requests.at(-1).event, 'onCron'); assert.equal(requests.at(-1).details, undefined);
-  assert.equal(w.manualRetry, undefined);
   w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('interrupted'); } };
   await w.sync('onCron'); assert.equal(w.state, 'error'); const stopped = requests.length;
   await w.sync('onCron'); assert.equal(requests.length, stopped);
@@ -113,7 +108,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   const active = busy.sync('onClick'); const busyCount = requests.length;
   await busy.sync('onCron'); assert.equal(requests.length, busyCount);
   complete(); await tick(); assert.equal(busy.state, 'success'); assert.equal(icon, 'check');
-  await busy.sync('onRetry', { retryOf: 'onClick' }); assert.equal(requests.length, busyCount);
+  await busy.sync('onRetry'); assert.equal(requests.length, busyCount);
   await active; assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
 
   let configPath;
@@ -126,7 +121,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   const fallback = startup(new FileSystemAdapter(), { id: 'custom-git-sync' }); await fallback.onload();
   assert.equal(intervalMs, 300000); fallback.onunload();
 
-  adapter.read = async () => '{"syncIntervalSeconds":0}';
+  adapter.read = async () => '{';
   const bad = startup(adapter); const beforeBad = requests.length; await bad.onload();
   assert.equal(bad.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('config.json'));
   assert.equal(bad.engine, undefined); bad.activate(); assert.equal(requests.length, beforeBad); bad.onunload();
@@ -134,6 +129,6 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS warning allows normal events without replay, blocked manual retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS warning allows normal events, auth/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
