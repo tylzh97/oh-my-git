@@ -13,6 +13,10 @@
   "successDisplayMs": 1000,
   // 非阻塞失败（网络、认证等）连续达到此次数后显示 ×，仍不暂停同步；任一次成功清零
   "escalateAfterFailures": 5,
+  // Ctrl/Cmd+S 安慰剂的挂载方式：
+  //   "default"：监听 window 捕获阶段的按键（公开 API），仅覆盖键盘快捷键
+  //   "hidden"：包装内部命令 editor:save-file（未公开 API，Obsidian 升级可能失效），覆盖快捷键、命令面板和自定义快捷键
+  "placeboMode": "hidden",
   // 是否在每月首次成功推送后创建 ogit/monthly/ 备份分支
   "monthlyBackupEnabled": true,
   // 使用 Git LFS 跟踪的扩展名：不含点，大小写不敏感

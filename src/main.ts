@@ -8,6 +8,8 @@ type SyncState = "idle" | "syncing" | "success" | "warning" | "error";
 const PLACEBO_SPIN_MS = 600;
 // 只有这些错误会暂停普通事件；其余失败不阻塞，本地快照照常进行
 const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict"];
+const SAVE_CALLBACKS = ["callback", "checkCallback", "editorCallback", "editorCheckCallback"] as const;
+type SaveCommand = Partial<Record<typeof SAVE_CALLBACKS[number], (...args: unknown[]) => unknown>>;
 
 export default class CustomGitSyncPlugin extends Plugin {
   private enabled = false;
@@ -91,7 +93,10 @@ export default class CustomGitSyncPlugin extends Plugin {
   }
   // Ctrl/Cmd+S 的安慰剂：只转圈并显示成功，不执行 Git；仅在待机时响应，不掩盖 ! 和 ×
   private placebo(): void {
-    if (!this.enabled || this.task || this.state !== "idle") return;
+    if (!this.enabled || this.task || this.state !== "idle") {
+      this.log("Placebo skipped", { enabled: this.enabled, busy: !!this.task, state: this.state });
+      return;
+    }
     this.log("Placebo save feedback");
     this.state = "syncing"; this.render(); this.spin();
     this.placeboTimer = window.setTimeout(() => {
@@ -99,6 +104,45 @@ export default class CustomGitSyncPlugin extends Plugin {
       this.state = "success"; this.render();
       this.placeboTimer = window.setTimeout(() => { this.placeboTimer = undefined; this.state = "idle"; this.render(); }, this.config.successDisplayMs);
     }, PLACEBO_SPIN_MS);
+  }
+  // 方案 A（default）：Obsidian 快捷键系统在 window 捕获阶段处理 Mod+S 并 stopPropagation，事件到不了 document；
+  // 同一 window 上的其他监听器不受影响。只观察不拦截；弹出窗口有各自的 window，打开时同样注册
+  private listenSaveKey(): void {
+    // 同时匹配物理键位 KeyS，兼容输入法（key 为 "Process"）和非 QWERTY 布局
+    const onKey = (event: KeyboardEvent): void => {
+      if (!(event.ctrlKey || event.metaKey) || (event.code !== "KeyS" && event.key?.toLowerCase() !== "s")) return;
+      this.log("Save shortcut detected", { key: event.key, code: event.code, repeat: event.repeat, state: this.state, busy: !!this.task });
+      if (!event.repeat) this.placebo();
+    };
+    this.registerDomEvent(window, "keydown", onKey, { capture: true });
+    this.registerEvent(this.app.workspace.on("window-open", (_, win) => this.registerDomEvent(win, "keydown", onKey, { capture: true })));
+    this.log("Placebo listening to save shortcut", { mode: "default" });
+  }
+  // 方案 B（hidden）：包装内部命令 editor:save-file（未公开 API），覆盖快捷键、命令面板和自定义快捷键。
+  // 先执行原逻辑再显示安慰剂；卸载时若包装仍在最外层才恢复，避免覆盖其他插件的包装
+  private hookSaveCommand(): void {
+    const registry = (this.app as unknown as { commands?: { commands?: Record<string, SaveCommand> } }).commands?.commands;
+    const command = registry?.["editor:save-file"];
+    if (!command) { this.log("Save command not found; placebo disabled", { mode: "hidden" }); return; }
+    const hooked: string[] = [];
+    for (const key of SAVE_CALLBACKS) {
+      const original = command[key];
+      if (typeof original !== "function") continue;
+      // check 系列回调的首参 checking 为 true 时只是询问命令是否可用，不算保存
+      const checking = key === "checkCallback" || key === "editorCheckCallback";
+      const wrapped = (...args: unknown[]): unknown => {
+        const result = original.apply(command, args);
+        if (!(checking && args[0] === true)) {
+          this.log("Save command executed", { via: key, state: this.state, busy: !!this.task });
+          this.placebo();
+        }
+        return result;
+      };
+      command[key] = wrapped;
+      this.register(() => { if (command[key] === wrapped) command[key] = original; });
+      hooked.push(key);
+    }
+    this.log("Placebo hooked save command", { mode: "hidden", callbacks: hooked });
   }
   private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
     if (this.task) { this.log("Sync dropped (busy)", { event }); return; }
@@ -172,12 +216,10 @@ export default class CustomGitSyncPlugin extends Plugin {
     this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.scheduleSave(file.path); }));
     // 改名立即单独提交，不走防抖：避免与后续编辑合并，保证 git log --follow 可追溯
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.trigger("onRename", { path: file.path, source: `vault:rename from ${oldPath}` })));
-    // 不拦截按键，Obsidian 自己的保存照常执行
-    this.registerDomEvent(document, "keydown", (event: KeyboardEvent) => {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s" && !event.repeat) this.placebo();
-    });
     this.app.workspace.onLayoutReady(() => {
       if (!this.enabled) return;
+      // 布局就绪后核心命令已全部注册
+      if (this.config.placeboMode === "hidden") this.hookSaveCommand(); else this.listenSaveKey();
       this.openFiles = this.collectOpenFiles();
       this.registerEvent(this.app.workspace.on("layout-change", () => {
         const current = this.collectOpenFiles();

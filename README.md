@@ -15,6 +15,7 @@
 | maxFileMiB | 30 | 插件提交的单文件上限，MiB |
 | successDisplayMs | 1000 | 成功 √ 的显示时长，毫秒 |
 | escalateAfterFailures | 5 | 非阻塞失败连续达到此次数后显示 ×（仍不暂停同步） |
+| placeboMode | "hidden" | Ctrl/Cmd+S 安慰剂的挂载方式：`default` 或 `hidden`，见「事件」 |
 | monthlyBackupEnabled | true | 是否创建月度备份分支 |
 | lfsExtensions | 见配置文件 | LFS 扩展名，不含点，大小写不敏感 |
 
@@ -65,7 +66,10 @@ dist/              # 构建产物，即分发内容（不入库）
 - onSave 带防抖：每次文件修改都把计时器重置为 saveDebounceSeconds，静默期满才同步一次。连续编辑期间由 onCron 兜底。其他事件开始同步时会取消计时器，因为这次同步已包含这些修改。
 - onRename：Obsidian 中重命名文件或文件夹后立即同步，不走防抖。这样改名会单独形成一个提交（相似度 100%），不会和后续编辑混在一起，用 `git log --follow -- <新路径>` 可以追溯到改名前的历史。Git 本身不记录重命名，`git mv` 与 `add -A` 的结果相同，所以插件不使用 `git mv`。
 - 「重试」统一按 onLoad 模式完整执行一次。
-- Ctrl/Cmd+S 是安慰剂：只在待机时让图标转一下再显示 √，不执行任何 Git 操作，也不拦截 Obsidian 自己的保存。黄色 ! 和红色 × 状态下不响应，以免掩盖故障。真实同步开始时会立即接管状态栏。
+- Ctrl/Cmd+S 是安慰剂：只在待机时让图标转一下再显示 √，不执行任何 Git 操作，也不拦截 Obsidian 自己的保存。黄色 ! 和红色 × 状态下不响应，以免掩盖故障。真实同步开始时会立即接管状态栏。挂载方式由 placeboMode 决定：
+  - `hidden`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原来的保存逻辑，再显示安慰剂。能覆盖快捷键、命令面板，以及用户自定义的保存快捷键。这是**未公开 API**，Obsidian 升级后可能失效；找不到该命令时只记一条日志，安慰剂不生效。插件卸载时恢复原回调。
+  - `default`：在 `window` 的捕获阶段监听 Ctrl/Cmd+S（同时识别物理键位 KeyS，兼容输入法），弹出窗口打开时也会注册。只用公开 API，但只覆盖键盘快捷键。Obsidian 的快捷键系统会在 `window` 捕获阶段对保存调用 `stopPropagation`，所以不能监听 `document`。
+  - 排查时，在 Console 中过滤 `Custom Git Sync`，查看 `Placebo hooked save command`、`Save command executed`、`Save shortcut detected`、`Placebo skipped` 这几条日志。
 - onUnload：请求取消，当前 Git 命令执行完后不再启动后续步骤。
 
 同步进行中（包括显示成功 √ 期间）新触发的事件直接丢弃。

@@ -48,14 +48,21 @@ function plugin() {
   return p;
 }
 function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plugins/renamed' }) {
-  const p = new Plugin(); p.manifest = manifest; p.vaultEvents = {};
+  const p = new Plugin(); p.manifest = manifest; p.vaultEvents = {}; p.workspaceEvents = {}; p.keyTargets = []; p.cleanups = [];
+  // 模拟 Obsidian 内部命令表中的保存命令
+  p.saveCalls = []; p.saveCommand = { id: 'editor:save-file', checkCallback(checking) { p.saveCalls.push(checking); return true; } };
   p.app = {
     vault: { adapter, configDir: '.custom', on(name, fn) { p.vaultEvents[name] = fn; return {}; } },
-    workspace: { on() { return {}; }, onLayoutReady(fn) { fn(); }, iterateAllLeaves() {} },
+    workspace: { on(name, fn) { p.workspaceEvents[name] = fn; return {}; }, onLayoutReady(fn) { fn(); }, iterateAllLeaves() {} },
+    commands: { commands: { 'editor:save-file': p.saveCommand } },
   };
   p.addStatusBarItem = () => button;
   p.registerEvent = p.registerInterval = () => {};
-  p.registerDomEvent = (target, type, fn) => { if (target === context.document && type === 'keydown') p.saveKey = fn; };
+  p.register = fn => p.cleanups.push(fn);
+  p.registerDomEvent = (target, type, fn, options) => {
+    if (type !== 'keydown' || target === button) return;
+    p.keyTargets.push({ target, capture: options?.capture }); p.saveKey = fn;
+  };
   // Test initialization without launching Git against an actual Vault.
   p.trigger = (event, details) => requests.push({ event, details });
   return p;
@@ -149,7 +156,7 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
 
   let configPath;
   const adapter = new FileSystemAdapter(); adapter.exists = async file => { configPath = file; return true; };
-  adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1}';
+  adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1,"placeboMode":"default"}';
   const loaded = startup(adapter); await loaded.onload();
   assert.equal(configPath, '.custom/plugins/renamed/config.jsonc'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
@@ -161,19 +168,45 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   // Ctrl/Cmd+S 安慰剂：只改状态栏，不调用 engine；! 和 × 下不响应；真实同步可接管
   loaded.config = { ...loaded.config, successDisplayMs: 200 };
   const placeboCount = requests.length;
-  loaded.saveKey({ ctrlKey: true, key: 'a' }); assert.equal(loaded.state, 'idle');
+  // 方案 A：监听 window 捕获阶段，不再监听 document；弹出窗口打开时同样注册
+  assert.equal(loaded.keyTargets.length, 1); assert.equal(loaded.keyTargets[0].target, context.window); assert.equal(loaded.keyTargets[0].capture, true);
+  const popout = {}; loaded.workspaceEvents['window-open']({}, popout);
+  assert.equal(loaded.keyTargets[1].target, popout); assert.equal(loaded.keyTargets[1].capture, true);
+  assert.equal(typeof loaded.saveCommand.checkCallback, 'function'); assert.equal(loaded.saveCommand.checkCallback.name, 'checkCallback');
+  loaded.saveKey({ ctrlKey: true, key: 'a', code: 'KeyA' }); assert.equal(loaded.state, 'idle');
+  loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(loaded.state, 'idle');
+  // 输入法开启时 key 为 Process，按物理键位识别
+  loaded.saveKey({ ctrlKey: true, key: 'Process', code: 'KeyS' }); assert.equal(loaded.state, 'syncing');
+  assert.ok(logs.some(args => args[0].includes('Save shortcut detected') && args[1].code === 'KeyS'));
+  await sleep(900); assert.equal(loaded.state, 'idle');
   loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, 'syncing'); assert.equal(icon, 'refresh-cw');
   await sleep(650); assert.equal(loaded.state, 'success'); assert.equal(icon, 'check');
   await sleep(250); assert.equal(loaded.state, 'idle'); assert.equal(requests.length, placeboCount);
   loaded.saveKey({ metaKey: true, key: 'S' }); assert.equal(loaded.state, 'syncing'); await sleep(900); assert.equal(loaded.state, 'idle');
   for (const blocked of ['warning', 'error']) { loaded.state = blocked; loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, blocked); }
+  assert.ok(logs.some(args => args[0].includes('Placebo skipped') && args[1].state === 'error'));
   loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' });
   loaded.engine = { async run(event) { requests.push({ event }); throw new SyncError('failed'); } };
   await loaded.sync('onCron'); assert.equal(loaded.state, 'warning');
   await sleep(900); assert.equal(loaded.state, 'warning'); assert.equal(icon, 'triangle-alert');
   loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' }); loaded.onunload(); await sleep(900); assert.equal(loaded.state, 'syncing');
   const fallback = startup(new FileSystemAdapter(), { id: 'custom-git-sync' }); await fallback.onload();
-  assert.equal(intervalMs, 300000); fallback.onunload();
+  assert.equal(intervalMs, 300000);
+
+  // 方案 B（默认配置 hidden）：包装内部保存命令，不监听按键；checking=true 只是询问，不触发安慰剂
+  assert.equal(fallback.keyTargets.length, 0);
+  fallback.config = { ...fallback.config, successDisplayMs: 0 };
+  const original = fallback.saveCommand.checkCallback; assert.notEqual(original.name, 'checkCallback');
+  assert.equal(fallback.saveCommand.checkCallback(true), true); assert.equal(fallback.state, 'idle');
+  assert.equal(fallback.saveCommand.checkCallback(false), true); assert.equal(fallback.state, 'syncing');
+  assert.deepEqual([...fallback.saveCalls], [true, false]);
+  assert.ok(logs.some(args => args[0].includes('Save command executed') && args[1].via === 'checkCallback'));
+  await sleep(700); assert.equal(fallback.state, 'idle');
+  fallback.state = 'warning'; fallback.saveCommand.checkCallback(false); assert.equal(fallback.state, 'warning'); fallback.state = 'idle';
+  fallback.onunload(); fallback.cleanups.forEach(fn => fn());
+  assert.equal(fallback.saveCommand.checkCallback.name, 'checkCallback'); // 卸载后恢复原回调
+  const missing = startup(new FileSystemAdapter(), { id: 'custom-git-sync' }); delete missing.app.commands; await missing.onload();
+  assert.ok(logs.some(args => args[0].includes('Save command not found'))); missing.onunload();
 
   adapter.read = async () => '{';
   const bad = startup(adapter); const beforeBad = requests.length; await bad.onload();
@@ -183,6 +216,6 @@ function startup(adapter, manifest = { id: 'custom-git-sync', dir: '.custom/plug
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS placebo default(window capture)/hidden(save command), failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
