@@ -1,0 +1,37 @@
+# main 每次更新（由 CNB 镜像推送）后测试、构建，并滚动发布到 nightly 预发布版本
+name: nightly
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# 连续推送时只保留最新一次，避免两次发布的删除/重建交错
+concurrency:
+  group: nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      # 集成测试需要 git-lfs，ubuntu runner 已自带
+      - run: npm test
+      # 删除旧 release 及 tag 后在当前 commit 重建，tag 始终指向最新构建
+      - name: publish nightly
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete nightly --cleanup-tag --yes || true
+          gh release create nightly dist/main.js dist/manifest.json dist/config.jsonc \
+            --prerelease --target "$GITHUB_SHA" --title "nightly" \
+            --notes "Built from ${GITHUB_SHA} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
