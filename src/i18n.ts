@@ -82,6 +82,27 @@ const ERRORS: Record<ErrorCode, Text> = {
     en: "Last sync failed; see console",
     zh: "上次同步失败，见控制台",
   },
+  // 安装后进程 PATH 不会更新，需重启 Obsidian
+  nogit: {
+    en: "Git not found; install Git, then restart Obsidian",
+    zh: "未找到 Git，请安装 Git 后重启 Obsidian",
+  },
+  nolfs: {
+    en: "Git LFS not found; install Git LFS, then restart Obsidian",
+    zh: "未找到 Git LFS，请安装 Git LFS 后重启 Obsidian",
+  },
+};
+
+// macOS 下给出 Homebrew 命令；插件运行时已追加 Homebrew 目录，装好后重试即可，无需重启
+const MAC_ERRORS: Partial<Record<ErrorCode, Text>> = {
+  nogit: {
+    en: "Git not found; run `brew install git` in Terminal, then retry",
+    zh: "未找到 Git，请在终端执行 brew install git 后重试",
+  },
+  nolfs: {
+    en: "Git LFS not found; run `brew install git-lfs` in Terminal, then retry",
+    zh: "未找到 Git LFS，请在终端执行 brew install git-lfs 后重试",
+  },
 };
 
 // 每次调用时读取 Obsidian 语言设置
@@ -94,5 +115,6 @@ export function t(key: keyof typeof UI): string {
 }
 
 export function errorText(code: ErrorCode): string {
-  return ERRORS[code][lang()];
+  const text = (process.platform === "darwin" && MAC_ERRORS[code]) || ERRORS[code];
+  return text[lang()];
 }

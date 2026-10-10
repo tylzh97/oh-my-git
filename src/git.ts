@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 
-export type ErrorCode = "config" | "repo" | "unfinished" | "remote" | "refused" | "conflict" | "size" | "failed";
+export type ErrorCode = "config" | "repo" | "unfinished" | "remote" | "refused" | "conflict" | "size" | "failed" | "nogit" | "nolfs";
 export interface OversizedFile { path: string; bytes: number }
 
 // 同步层面的错误：code 决定 UI 表现，message 仅用于显示和日志
@@ -29,6 +29,8 @@ export function runGit(args: string[], cwd: string, timeoutMs: number, input?: s
       cwd, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, encoding: "utf8", windowsHide: true,
     }, (error, stdout, stderr) => {
       if (!error) return resolve(stdout.trimEnd());
+      // 可执行文件不存在：进程根本没启动，与 Git 自身的失败区分开
+      if (error.code === "ENOENT") return reject(new SyncError("nogit", `git not found in PATH: ${PATH}`));
       reject(new GitError(args, typeof error.code === "number" ? error.code : null, stdout, stderr));
     });
     if (input !== undefined) child.stdin?.end(input);

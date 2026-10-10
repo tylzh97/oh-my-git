@@ -94,6 +94,16 @@ async function failures() {
  assert.equal(git(u.local,'show','HEAD:offline.md'),'offline');await expectCode(()=>run(u,'onLoad'),'remote');
  console.log('PASS missing upstream, refused push, unreachable remote keeps local snapshots');
 
+ // PATH 只含 git → nolfs，且不提交任何内容。仅 Linux：其他平台 git 可能从自带目录或 Homebrew 找到 lfs
+ if (process.platform==='linux') {
+  const l=await fixture('no-lfs');await run(l);const head=git(l.local,'rev-parse','HEAD');await write(l.local,'nolfs.md','x\n');
+  const bin=path.join(l.base,'bin');await fs.mkdir(bin);await fs.symlink(git(l.base,'--exec-path')+'/git',path.join(bin,'git'));
+  const savedPath=process.env.PATH;process.env.PATH=bin;
+  try { await expectCode(()=>run(l,'onSave'),'nolfs'); } finally { process.env.PATH=savedPath; }
+  assert.equal(git(l.local,'rev-parse','HEAD'),head);assert.equal(git(l.local,'status','--porcelain'),'?? nolfs.md');
+  console.log('PASS missing git-lfs reported as nolfs without touching the repository');
+ }
+
  // 手动 merge 冲突未解决：不提交、不推送冲突标记；用户完成合并后自动恢复
  const m=await fixture('manual-merge');await run(m);await remoteCommit(m,'note.md','remote side\n');
  await commit(m.local,'note.md','local side\n');git(m.local,'fetch');

@@ -46,6 +46,12 @@ const { build } = require('esbuild');
   const remote = path.join(base, 'missing.git');
   await assert.rejects(() => runGit(['ls-remote', remote], base, 5000), e => e instanceof GitError && e.exitCode === 128);
   await assert.rejects(() => runGit(['merge-base', '--is-ancestor', 'HEAD', 'HEAD'], base, 5000), e => e.exitCode === 128);
-  console.log('PASS JSONC parsing, configuration defaults/overrides/path, GitError exit code and output');
+  // PATH 中没有 git → nogit；macOS 会追加 Homebrew 目录，可能仍能找到 git，故跳过
+  if (process.platform !== 'darwin') {
+    const savedPath = process.env.PATH; process.env.PATH = base;
+    try { await assert.rejects(() => runGit(['version'], base, 5000), e => e.code === 'nogit'); }
+    finally { process.env.PATH = savedPath; }
+  }
+  console.log('PASS JSONC parsing, configuration defaults/overrides/path, GitError exit code and output, missing git');
   console.log('Fixtures retained:', base);
 })().catch(error => { console.error(error); process.exitCode = 1; });

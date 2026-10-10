@@ -164,7 +164,12 @@ export class GitSyncEngine {
 
   private async snapshot(): Promise<{ head: string; skipped: OversizedFile[] }> {
     // 不加 --force：用户自定义的 pre-push hook 不能被静默覆盖
-    await this.git(["lfs", "install", "--local"]);
+    try { await this.git(["lfs", "install", "--local"]); }
+    catch (error) {
+      // 已有 pre-push hook 等也会导致失败；lfs version 同样失败才判定为未安装 LFS
+      if (error instanceof GitError && !(await this.git(["lfs", "version"]).then(() => true, () => false))) throw new SyncError("nolfs", error.message);
+      throw error;
+    }
     await this.stageAll(this.root);
     const skipped = await this.skipOversized();
     if (await this.git(["diff", "--cached", "--name-only"])) {

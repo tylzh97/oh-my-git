@@ -76,6 +76,11 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   p.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('refused', 'pre-receive hook declined'); } };
   await p.sync('onLoad'); assert.equal(icon, 'x'); assert.equal(p.state, 'error');
   assert.ok(tooltip.includes('远程拒绝推送'));
+  // 缺少 git / git-lfs 直接阻塞并给出安装提示
+  for (const [code, text] of [['nogit', '未找到 Git'], ['nolfs', '未找到 Git LFS']]) {
+    const q = plugin(); q.engine = { async run() { throw new SyncError(code); } };
+    await q.sync('onClick'); assert.equal(q.state, 'error'); assert.ok(tooltip.includes(text));
+  }
   const blocked = requests.length;
   for (const event of ['onClick', 'onLoad', 'onOpen', 'onSave', 'onClose', 'onCron']) await p.sync(event);
   assert.equal(requests.length, blocked);

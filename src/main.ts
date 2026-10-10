@@ -7,7 +7,7 @@ import { errorText, t } from "./i18n";
 type SyncState = "idle" | "syncing" | "success" | "warning" | "error";
 const PLACEBO_SPIN_MS = 600;
 // 只有这些错误会暂停普通事件；其余失败不阻塞，本地快照照常进行
-const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict"];
+const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict", "nogit", "nolfs"];
 const SAVE_CALLBACKS = ["callback", "checkCallback", "editorCallback", "editorCheckCallback"] as const;
 type SaveCommand = Partial<Record<typeof SAVE_CALLBACKS[number], (...args: unknown[]) => unknown>>;
 
