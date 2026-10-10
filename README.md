@@ -63,7 +63,7 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 前提
 
-- 系统 PATH 中有 Git 和 git lfs，Obsidian 进程能找到它们。
+- 系统 PATH 中有 Git 和 git lfs，Obsidian 进程能找到它们。macOS 从 Dock 启动的应用不继承 shell PATH，插件会自动追加 `/opt/homebrew/bin` 和 `/usr/local/bin`；装在其他位置的需自行处理。
 - Vault 是 Git 仓库，当前分支配置了远程 upstream，且不以 `ogit/` 开头。
 - 配置好 user.name、user.email；认证和签名必须能在非交互环境下完成。
 

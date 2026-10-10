@@ -19,7 +19,11 @@ export class GitError extends Error {
 
 export function runGit(args: string[], cwd: string, timeoutMs: number, input?: string): Promise<string> {
   // 显式开启 smudge，避免用户环境变量让 Vault 中出现 LFS 指针
-  const env = { ...process.env, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_LFS_SKIP_SMUDGE: "0" };
+  // macOS GUI 进程不继承 shell PATH，追加 Homebrew 目录以找到 git-lfs；git 本身仍用原 PATH 中的
+  const PATH = process.platform === "darwin"
+    ? [process.env.PATH, "/opt/homebrew/bin", "/usr/local/bin"].filter(Boolean).join(":")
+    : process.env.PATH;
+  const env = { ...process.env, PATH, GIT_TERMINAL_PROMPT: "0", GCM_INTERACTIVE: "Never", GIT_LFS_SKIP_SMUDGE: "0" };
   return new Promise((resolve, reject) => {
     const child = execFile("git", ["-c", "credential.interactive=false", ...args], {
       cwd, env, timeout: timeoutMs, maxBuffer: 32 * 1024 * 1024, encoding: "utf8", windowsHide: true,
