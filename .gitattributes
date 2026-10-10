@@ -1,0 +1,2 @@
+# cmd/sh 双语脚本必须保持 LF，CRLF 会破坏 sh 部分
+*.cmd text eol=lf

@@ -33,14 +33,17 @@ tests/
   ui.cjs        # 状态、交互和重试
   sync.cjs      # 临时仓库中的同步与数据保护
   config.cjs    # 配置及 Git 错误信息
+  setup.cjs     # setup-git.cmd 的 sh 部分
 scripts/
   read-record.cjs  # 只读解析提交元数据
+  setup-git.cmd    # 手动执行的 Vault Git 配置脚本（cmd/sh 双语）
 config.jsonc       # 带注释的默认配置，同时打包进 main.js
 dist/              # 构建产物，即分发内容（不入库）
   manifest.json
   main.js
   config.jsonc
   scripts/read-record.cjs
+  scripts/setup-git.cmd
 ```
 
 ## 安装
@@ -48,7 +51,7 @@ dist/              # 构建产物，即分发内容（不入库）
 从社区插件市场安装：只会下载 `main.js` 和 `manifest.json`。需要改配置时，从本仓库复制 `config.jsonc` 到 `<Vault>/.obsidian/plugins/oh-my-git/` 再修改；需要审计工具时同样复制 `scripts/read-record.cjs`。
 
 手动安装：执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/oh-my-git/`，最后在 Obsidian 里启用插件。
-其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具。
+其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具，`scripts/setup-git.cmd` 是可选的 Git 配置脚本。
 源码仓库应放在 Vault 之外，否则源码会被插件同步进笔记仓库。
 
 ## 发版
@@ -67,7 +70,20 @@ dist/              # 构建产物，即分发内容（不入库）
 - Vault 是 Git 仓库，当前分支配置了远程 upstream，且不以 `ogit/` 开头。
 - 配置好 user.name、user.email；认证和签名必须能在非交互环境下完成。
 
-建议在 Vault 的 .gitignore 中忽略 `.obsidian/workspace*.json`：Obsidian 会不停地改写这些文件，多台设备同步时几乎每次都会冲突。
+建议在 Vault 的 .gitignore 中忽略 `.obsidian/workspace*.json`：Obsidian 会不停地改写这些文件，多台设备同步时几乎每次都会冲突。`scripts/setup-git.cmd` 可以一次配好。
+
+## Git 配置脚本 setup-git.cmd
+
+手动执行，不会被插件自动调用。Windows 双击或在 cmd 中运行；macOS/Linux 执行 `sh setup-git.cmd`。运行前关闭 Obsidian 或禁用插件。
+
+1. 从脚本所在目录向上找第一个名为 `.obsidian` 的目录，其父目录即 Vault。
+2. Vault 下没有 `.git` 时执行 `git init -b main` 和 `git lfs install --local`。
+3. `.gitattributes` 没有 `# BEGIN OGIT LFS` 区块时追加（与插件默认 lfsExtensions 一致，之后由插件按配置维护）；`.gitignore` 没有 `# BEGIN OGIT IGNORE` 区块时追加。已有区块跳过，用户自己的规则不动。
+4. 已有仓库：按全部 ignore 规则取消跟踪已被忽略的文件，磁盘文件保留。推送后，其他设备下次合并时会删除它们本地的这些文件，历史中仍可找回。
+5. 提交：新仓库提交整个 Vault（`ogit: initialize vault (setup-git)`），已有仓库只提交规则变更（`ogit: apply ignore and LFS rules (setup-git)`）。不推送，也不处理 remote，remote 由用户维护。
+
+重复执行是安全的。缺少 Git、git lfs（仅初始化时需要）或 user.name/user.email 时给出提示后退出，不会代为安装。
+脚本必须保持 LF 换行（仓库 `.gitattributes` 已约束）；规则数据只写一份，在文件末尾的 `#I`/`#A` 行。
 
 插件不会安装 Git、初始化仓库、设置 upstream，也不会强推工作分支。Vault 的 .gitignore 由用户维护，被忽略的文件不在备份范围内。其他不满足条件的情况由 Git 自身报错，错误信息打印在控制台。
 

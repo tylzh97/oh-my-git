@@ -6,7 +6,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "build": "npm run typecheck && node esbuild.config.mjs",
-    "test": "npm run build && node tests/config.cjs && node tests/ui.cjs && node tests/sync.cjs"
+    "test": "npm run build && node tests/config.cjs && node tests/ui.cjs && node tests/sync.cjs && node tests/setup.cjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

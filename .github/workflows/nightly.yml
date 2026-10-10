@@ -32,6 +32,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete nightly --cleanup-tag --yes || true
-          gh release create nightly dist/main.js dist/manifest.json dist/config.jsonc \
+          gh release create nightly dist/main.js dist/manifest.json dist/config.jsonc dist/scripts/setup-git.cmd \
             --prerelease --target "$GITHUB_SHA" --title "nightly" \
             --notes "Built from ${GITHUB_SHA} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

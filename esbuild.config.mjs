@@ -16,4 +16,4 @@ await build({
   logLevel: "info"
 });
 
-for (const file of ["manifest.json", "config.jsonc", "scripts/read-record.cjs"]) await cp(file, `dist/${file}`);
+for (const file of ["manifest.json", "config.jsonc", "scripts/read-record.cjs", "scripts/setup-git.cmd"]) await cp(file, `dist/${file}`);
