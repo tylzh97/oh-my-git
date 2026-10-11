@@ -188,6 +188,11 @@ export default class OhMyGitPlugin extends Plugin {
       if (this.enabled && this.button === button) this.render();
     }
   }
+  // 核心插件「日记」的目录；读不到或位于 Vault 根目录时返回 ""，引擎不做 onLoad 旧空日记清理
+  private async diaryDir(): Promise<string> {
+    const text = await this.app.vault.adapter.read(`${this.app.vault.configDir}/daily-notes.json`).catch(() => "");
+    try { return String(JSON.parse(text).folder ?? "").replace(/^\/+|\/+$/g, ""); } catch { return ""; }
+  }
   private collectOpenFiles(): Set<string> {
     const files = new Set<string>();
     this.app.workspace.iterateAllLeaves(leaf => { if (leaf.view instanceof FileView && leaf.view.file) files.add(leaf.view.file.path); });
@@ -207,7 +212,10 @@ export default class OhMyGitPlugin extends Plugin {
       this.config = await loadConfig(adapter, this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`);
       if (!this.enabled) return;
       if (!(adapter instanceof FileSystemAdapter)) throw new SyncError("repo", "Vault is not on the local file system");
-      this.engine = new GitSyncEngine(adapter.getBasePath(), (event, details) => this.log(event, details), undefined, this.config);
+      const diaryDir = await this.diaryDir();
+      if (!this.enabled) return;
+      this.log("Diary folder", { diaryDir });
+      this.engine = new GitSyncEngine(adapter.getBasePath(), (event, details) => this.log(event, details), undefined, this.config, diaryDir);
     } catch (error) {
       if (!this.enabled) return;
       this.failure = error instanceof SyncError ? error : new SyncError("config", String(error)); this.state = "error";

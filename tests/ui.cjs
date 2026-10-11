@@ -172,6 +172,11 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   assert.equal(configPath, '.custom/plugins/renamed/config.jsonc'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
   cron(); assert.equal(requests.at(-1).event, 'onCron');
+  // 日记目录取自 <configDir>/daily-notes.json，去掉首尾斜杠；读不到时为空
+  const diaryAdapter = new FileSystemAdapter();
+  diaryAdapter.read = async file => file === '.custom/daily-notes.json' ? '{"folder":"/Journal/Daily/"}' : '{}';
+  const diary = startup(diaryAdapter); await diary.onload(); assert.equal(diary.engine.diaryDir, 'Journal/Daily'); diary.onunload();
+  assert.equal(loaded.engine.diaryDir, '');
   loaded.vaultEvents.rename({ path: 'new.md' }, 'old.md');
   assert.equal(requests.at(-1).event, 'onRename'); assert.equal(requests.at(-1).details.path, 'new.md');
   assert.equal(requests.at(-1).details.source, 'vault:rename from old.md');

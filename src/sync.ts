@@ -2,6 +2,7 @@ import { GitError, SyncError, runGit, type ErrorCode, type OversizedFile } from 
 import { DEFAULT_CONFIG, type SyncConfig } from "./config";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
+import type { Stats } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
@@ -15,6 +16,7 @@ interface Journal {
   operationId: string; event: SyncEvent; phase: string; branch: string; upstream: string;
   localCommit?: string; remoteCommit?: string; localRecoveryRef?: string; remoteRecoveryRef?: string;
   resultCommit?: string; temporaryWorktree?: string; skipped?: OversizedFile[];
+  emptySkipped?: string[]; emptiesRemoved?: string[];
   outcome: "running" | "success" | "error" | "interrupted"; errorCode?: ErrorCode; error?: string;
 }
 
@@ -31,6 +33,11 @@ const shared = globalThis as typeof globalThis & { [RUNNING]?: boolean };
 // 用户手动执行且尚未完成的 Git 操作标记（位于当前 worktree 的 git 目录）
 const UNFINISHED = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"];
 const exists = (file: string): Promise<boolean> => fs.stat(file).then(() => true, () => false);
+// 跨过零点不久的空日记先保留，避免刚创建就被删
+const DIARY_GRACE_MS = 2 * 60 * 60 * 1000;
+// Windows/macOS 的 birthtime 可靠；其他平台或拿不到时退回 mtime
+const createdAt = (stat: Stats): number =>
+  (process.platform === "win32" || process.platform === "darwin") && stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.mtimeMs;
 
 export class GitSyncEngine {
   private readonly stateDir: string;
@@ -39,10 +46,14 @@ export class GitSyncEngine {
   private context!: Context;
   private journal!: Journal;
   private device = "";
+  // 上次记录的空 md 列表；不变时不重复写入 history
+  private lastEmpty = "";
 
   constructor(private readonly root: string, private readonly log: (event: string, details?: unknown) => void,
     stateBase = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), ".local", "state"), "ObsidianOhMyGit"),
-    private readonly config: SyncConfig = DEFAULT_CONFIG) {
+    private readonly config: SyncConfig = DEFAULT_CONFIG,
+    // Obsidian 日记目录（相对 Vault）；为空时不做 onLoad 旧空日记清理
+    private readonly diaryDir = "") {
     const resolved = path.resolve(root);
     const repoId = createHash("sha256").update(process.platform === "win32" ? resolved.toLowerCase() : resolved).digest("hex").slice(0, 16);
     this.stateDir = path.join(stateBase, repoId);
@@ -132,6 +143,57 @@ export class GitSyncEngine {
     await this.git(["commit", "--allow-empty", "-F", "-"], cwd, `${title}\n\nOgit-Metadata-Begin\n${record}\nOgit-Metadata-End\n`);
     return this.git(["rev-parse", "HEAD"], cwd);
   }
+  // 只取消暂存，工作区文件不动
+  private async unstage(names: string[]): Promise<void> {
+    if (!names.length) return;
+    await this.git(["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"], this.root, names.join("\0"));
+  }
+  // 0 字节普通文件返回 Stats，否则（含已消失、符号链接）返回 null
+  private async emptyStat(name: string): Promise<Stats | null> {
+    const stat = await fs.lstat(path.join(this.root, name)).catch(() => null);
+    return stat?.isFile() && stat.size === 0 ? stat : null;
+  }
+  // 未跟踪的 0 字节 .md。Obsidian 会自动创建空日记，入库会与其他设备的同名日记冲突
+  private async emptyMds(dir = "."): Promise<string[]> {
+    const untracked = (await this.git(["--literal-pathspecs", "ls-files", "--others", "--exclude-standard", "-z", "--", dir])).split("\0");
+    const empty: string[] = [];
+    for (const name of untracked) {
+      if (name.toLowerCase().endsWith(".md") && await this.emptyStat(name)) empty.push(name);
+    }
+    return empty;
+  }
+  // 删除前再确认一次仍为空，缩小与用户输入的竞争窗口
+  private async removeEmpties(names: string[]): Promise<void> {
+    const removed: string[] = [];
+    for (const name of names) {
+      if (!(await this.emptyStat(name))) continue;
+      await fs.rm(path.join(this.root, name));
+      removed.push(name);
+    }
+    if (!removed.length) return;
+    (this.journal.emptiesRemoved ??= []).push(...removed);
+    this.log("Empty files removed", removed);
+  }
+  // 仅 onLoad：删除日记目录中非今天创建、且已超过宽限期的空日记
+  private async cleanEmptyDiaries(): Promise<void> {
+    if (!this.diaryDir) return;
+    const now = new Date();
+    const stale: string[] = [];
+    for (const name of await this.emptyMds(this.diaryDir)) {
+      const stat = await this.emptyStat(name);
+      if (!stat) continue;
+      const created = createdAt(stat);
+      if (new Date(created).toDateString() !== now.toDateString() && now.getTime() - created > DIARY_GRACE_MS) stale.push(name);
+    }
+    await this.removeEmpties(stale);
+  }
+  // 合并结果中已有同名文件时，本地未跟踪空 md 会挡住 read-tree；0 字节删掉无损，随后写入远程内容
+  private async removeCollidingEmpties(result: string): Promise<void> {
+    const empty = await this.emptyMds();
+    if (!empty.length) return;
+    const incoming = new Set((await this.git(["ls-tree", "-r", "--name-only", "-z", result])).split("\0"));
+    await this.removeEmpties(empty.filter(name => incoming.has(name)));
+  }
   // 只约束本次快照新引入的内容：新增或修改的超限文件取消暂存，不入库；已在历史中的文件不受影响
   private async skipOversized(): Promise<OversizedFile[]> {
     const limit = this.config.maxFileMiB * 1024 * 1024;
@@ -141,11 +203,7 @@ export class GitSyncEngine {
       const bytes = (await fs.stat(path.join(this.root, name))).size;
       if (bytes > limit) oversized.push({ path: name, bytes });
     }
-    if (oversized.length) {
-      // 只取消暂存，工作区文件不动
-      await this.git(["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"], this.root,
-        oversized.map(file => file.path).join("\0"));
-    }
+    await this.unstage(oversized.map(file => file.path));
     return oversized;
   }
   // 只维护 OGIT 区块，不动用户自己的规则
@@ -170,7 +228,11 @@ export class GitSyncEngine {
       if (error instanceof GitError && !(await this.git(["lfs", "version"]).then(() => true, () => false))) throw new SyncError("nolfs", error.message);
       throw error;
     }
+    const empty = await this.emptyMds();
     await this.stageAll(this.root);
+    await this.unstage(empty);
+    const key = empty.join("\0");
+    if (key !== this.lastEmpty) { this.journal.emptySkipped = empty; this.lastEmpty = key; }
     const skipped = await this.skipOversized();
     if (await this.git(["diff", "--cached", "--name-only"])) {
       const stats = await this.git(["diff", "--cached", "--shortstat"]);
@@ -215,6 +277,7 @@ export class GitSyncEngine {
       // 结果也保留独立分支，应用或推送失败时仍可找回
       await this.git(["update-ref", refs.localRecoveryRef.replace(/local$/, "result"), result, ZERO]);
       await this.phase("apply", { resultCommit: result });
+      await this.removeCollidingEmpties(result);
       // 两树 read-tree 拒绝覆盖未提交修改和未跟踪文件；不在 Vault 中 reset --hard
       await this.git(["read-tree", "-m", "-u", local, result]);
       await this.gitAlways(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
@@ -311,6 +374,7 @@ export class GitSyncEngine {
   private async execute(event: SyncEvent, details: SyncDetails | undefined): Promise<SyncResult> {
     try {
       await this.phase("snapshot");
+      if (event === "onLoad") await this.cleanEmptyDiaries();
       const snapshot = await this.snapshot();
       let local = snapshot.head;
       await this.phase("snapshotted", { localCommit: local, skipped: snapshot.skipped });
