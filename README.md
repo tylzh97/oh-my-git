@@ -89,8 +89,9 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 事件
 
-- onLoad / onRetry / onResolve：提交本地变化 → fetch upstream → 必要时保护双方并在临时 worktree 中整合 → 应用到 Vault → push → 月度备份。
-- onOpen / onSave / onClose / onRename / onCron / onClick：提交整个仓库 → push → 月度备份，不拉取、不合并。
+- onLoad / onRetry / onResolve / onCron：提交本地变化 → fetch upstream → 落后则快进，分叉则保护双方并在临时 worktree 中整合 → 应用到 Vault → push → 月度备份。
+- onOpen / onSave / onClose / onRename / onClick：提交整个仓库 → push → 月度备份，不主动拉取。push 被拒且远程已前进时，按上面的方式整合后重推一次。
+- 没有新提交（本地与 upstream 相同）时不 push。
 - onSave 带防抖：每次文件修改都把计时器重置为 saveDebounceSeconds，静默期满才同步一次。连续编辑期间由 onCron 兜底。其他事件开始同步时会取消计时器，因为这次同步已包含这些修改。
 - onRename：Obsidian 中重命名文件或文件夹后立即同步，不走防抖。这样改名会单独形成一个提交（相似度 100%），不会和后续编辑混在一起，用 `git log --follow -- <新路径>` 可以追溯到改名前的历史。Git 本身不记录重命名，`git mv` 与 `add -A` 的结果相同，所以插件不使用 `git mv`。
 - 「重试」统一按 onLoad 模式完整执行一次。
@@ -122,10 +123,12 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 数据保护
 
-- 整合前，本地和远程各推送一个不可变恢复分支，推送失败就停止；整合结果另存一个本地 result 分支。
+- 分叉整合前，本地和远程各推送一个不可变恢复分支，推送失败就停止；整合结果另存一个本地 result 分支。快进不创建恢复分支：双方提交都已在 upstream 上。
 - 合并在临时 worktree 中进行，冲突不写入 Vault。
 - 用两树 `read-tree -m -u` 应用结果：Git 会拒绝覆盖未提交的修改和未跟踪文件，但**被 .gitignore 忽略的文件可能被覆盖**。Vault 内不使用 reset --hard 或 clean。
-- 日常 push 被拒绝时会 fetch，并在远程已分叉时保护双方，然后进入 ×，不自动整合。
+- 日常 push 被拒绝时会 fetch：远程未前进视为服务端拒绝（×）；前进了则快进或保护双方后整合并重推，只有内容冲突才进入 ×。
+- 重推时远程又前进（多台设备抢推送）按网络错误处理，下次同步再整合，不进入 ×。
+- onCron 和 push 被拒的日常事件也会把远程改动写入 Vault。若从快照到写入的几秒内，用户正好编辑了远程也改过的文件，read-tree 会拒绝覆盖并报错，数据不受影响，下次同步重新整合（每次整合都会新建一组恢复分支）。
 - 远程不可用时，本地快照照常提交；恢复连接后的下一次同步会一并推送。
 - 保持本地/远程：选择整个 Git 跟踪文件树，以 upstream 为第一父提交；upstream 尚未包含本地历史时，以本地快照为第二父提交。不使用 rebase，不强推。
 
@@ -147,7 +150,7 @@ Obsidian 启动时会自动创建当天的空日记。如果另一台设备已�
 ## 分支命名
 
 - `ogit/recovery/<原因>/<UTC时间>-<设备ID>-<随机ID>/local|remote|result`
-- 原因：startup-merge、push-rejected、keep-local、keep-remote
+- 原因：merge、push-rejected、keep-local、keep-remote
 - `ogit/monthly/YYYY-MM/<安全分支名>-<分支名 SHA256 前8位>`
 
 每月首次成功推送后创建当月的备份分支（月份按本地时区），已存在的不会覆盖（create-only lease）。失败只记日志，下次同步再试，不影响主线同步结果。恢复分支不会自动删除。

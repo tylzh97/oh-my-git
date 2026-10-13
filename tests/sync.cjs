@@ -48,22 +48,38 @@ async function basics() {
 
  await remoteCommit(f,'remote.md','remote\n');await write(f.local,'local.md','local\n');await run(f,'onLoad');
  assert.equal(await read(f.local,'remote.md'),'remote\n');assertMerged(f);
- assert.ok(refs(f).includes('startup-merge'));assert.ok(git(f.local,'for-each-ref','--format=%(refname)','refs/heads/ogit/recovery').includes('/result'));
+ assert.ok(refs(f).includes('/recovery/merge/'));assert.ok(git(f.local,'for-each-ref','--format=%(refname)','refs/heads/ogit/recovery').includes('/result'));
  console.log('PASS startup merge keeps both histories and recovery refs');
 
- await remoteCommit(f,'new.md','new remote\n');await write(f.local,'daily.md','daily\n');const beforeRemote=git(f.remote,'rev-parse','main');
+ // 日常 push 被拒且双方改了不同文件：自动合并并重推
+ await remoteCommit(f,'new.md','new remote\n');await write(f.local,'daily.md','daily\n');
+ await run(f,'onSave');assertMerged(f);assert.ok(refs(f).includes('push-rejected'));
+ assert.equal(git(f.remote,'show','main:new.md'),'new remote');assert.equal(git(f.remote,'show','main:daily.md'),'daily');
+ assert.equal(await read(f.local,'new.md'),'new remote\n');assert.equal(git(f.local,'rev-parse','HEAD'),git(f.remote,'rev-parse','main'));
+ console.log('PASS daily rejection auto-merges different files and pushes');
+
+ // 同一文件真冲突：保护双方后进入 conflict，由用户选边
+ await remoteCommit(f,'daily.md','daily remote\n');await write(f.local,'daily.md','daily local\n');const beforeRemote=git(f.remote,'rev-parse','main');
  await expectCode(()=>run(f,'onSave'),'conflict');assert.equal(git(f.remote,'rev-parse','main'),beforeRemote);
- assert.equal(await read(f.local,'daily.md'),'daily\n');assert.ok(refs(f).includes('push-rejected'));
- await run(f,'onResolve','local');assertMerged(f);assert.equal(git(f.remote,'ls-tree','--name-only','main','new.md'),'');
+ assert.equal(await read(f.local,'daily.md'),'daily local\n');
+ await run(f,'onResolve','local');assertMerged(f);assert.equal(git(f.remote,'show','main:daily.md'),'daily local');
  const record=metadata(f.remote,'main');assert.equal(record.schemaVersion,2);assert.equal(record.strategy,'local');
  assert.deepEqual(record.parents,git(f.remote,'rev-list','--parents','-n','1','main').split(' ').slice(1));
  assert.equal(record.parents[0],beforeRemote);assert.equal(record.parents[1],record.localCommit);
  assert.equal(record.resultTree,git(f.remote,'rev-parse','main^{tree}'));assert.equal(git(f.remote,'rev-parse',record.remoteRecoveryRef),beforeRemote);
- console.log('PASS daily rejection protects both sides, keep-local merge commit, JSON metadata');
+ console.log('PASS daily conflict protects both sides, keep-local merge commit, JSON metadata');
 
- await remoteCommit(f,'retry.md','retry remote\n');await write(f.local,'retry-local.md','x\n');
- await expectCode(()=>run(f,'onSave'),'conflict');await run(f,'onRetry');assert.equal(await read(f.local,'retry.md'),'retry remote\n');assertMerged(f);
- console.log('PASS retry runs full startup mode and merges');
+ // 闲置设备 onCron 拉取、启动快进：都不创建恢复分支
+ const remoteRefs=refs(f),localRefs=git(f.local,'for-each-ref','--format=%(refname)','refs/heads/ogit/recovery');
+ await remoteCommit(f,'idle.md','idle\n');await run(f,'onCron');
+ assert.equal(await read(f.local,'idle.md'),'idle\n');assert.equal(git(f.local,'rev-parse','HEAD'),git(f.remote,'rev-parse','main'));
+ await remoteCommit(f,'ff.md','ff\n');await run(f,'onLoad');assert.equal(await read(f.local,'ff.md'),'ff\n');
+ assert.equal(refs(f),remoteRefs);assert.equal(git(f.local,'for-each-ref','--format=%(refname)','refs/heads/ogit/recovery'),localRefs);
+ console.log('PASS idle onCron pulls, fast-forward creates no recovery refs');
+
+ // 无新提交时不访问远程：远程拒绝一切推送也能成功
+ await hook(f.remote,'pre-receive','#!/bin/sh\nexit 1\n');await run(f,'onSave');await fs.rm(path.join(f.remote,'hooks','pre-receive'));
+ console.log('PASS no push without new commits');
 }
 
 async function conflicts() {
@@ -92,7 +108,13 @@ async function failures() {
  const u=await fixture('unreachable');await run(u);git(u.local,'remote','set-url','origin',path.join(u.base,'missing.git'));
  await write(u.local,'offline.md','offline\n');await expectCode(()=>run(u,'onSave'),'remote');
  assert.equal(git(u.local,'show','HEAD:offline.md'),'offline');await expectCode(()=>run(u,'onLoad'),'remote');
- console.log('PASS missing upstream, refused push, unreachable remote keeps local snapshots');
+ // 重推时远程又前进（设备抢推送）→ remote，可自动重试；下次同步整合成功
+ const race=await fixture('race');await run(race);await remoteCommit(race,'first.md','first\n');await write(race.local,'mine.md','mine\n');
+ const originalPush=race.engine.pushRefs.bind(race.engine);let mainPushes=0;
+ race.engine.pushRefs=async(specs,...rest)=>{if(specs[0].endsWith(':refs/heads/main')&&++mainPushes===2)await remoteCommit(race,'second.md','second\n');return originalPush(specs,...rest);};
+ await expectCode(()=>run(race,'onSave'),'remote');race.engine.pushRefs=originalPush;await run(race,'onSave');
+ for(const file of ['first.md','second.md','mine.md'])assert.notEqual(git(race.remote,'ls-tree','--name-only','main',file),'');
+ console.log('PASS missing upstream, refused push, push race, unreachable remote keeps local snapshots');
 
  // PATH 只含 git → nolfs，且不提交任何内容。仅 Linux：其他平台 git 可能从自带目录或 Homebrew 找到 lfs
  if (process.platform==='linux') {
@@ -139,7 +161,7 @@ async function failures() {
  const controller=new AbortController(),originalGit=x.engine.git.bind(x.engine);
  x.engine.git=async(args,...rest)=>{const out=await originalGit(args,...rest);if(args[0]==='read-tree'&&args[1]==='-m')controller.abort();return out;};
  await assert.rejects(()=>x.engine.run('onLoad',undefined,controller.signal),e=>e.message==='Sync cancelled');
- const applied=(await history(x)).at(-1);assert.equal(applied.phase,'push');assert.equal(git(x.local,'rev-parse','HEAD'),applied.resultCommit);
+ const applied=(await history(x)).at(-1);assert.equal(applied.phase,'applied');assert.equal(git(x.local,'rev-parse','HEAD'),applied.resultCommit);
  assert.equal(git(x.local,'status','--porcelain'),'');assert.equal(await read(x.local,'remote.md'),'remote\n');
  assert.equal(git(x.local,'worktree','list','--porcelain').split('\n').filter(line=>line.startsWith('worktree ')).length,1);
  assert.deepEqual((await fs.readdir(await stateDir(x))).filter(name=>name.startsWith('.omg.')),[]);

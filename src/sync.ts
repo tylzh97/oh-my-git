@@ -22,8 +22,8 @@ interface Journal {
 
 const ZERO = "0".repeat(40);
 const LFS_BLOCK = /# BEGIN OGIT LFS\r?\n[\s\S]*?# END OGIT LFS(?:\r?\n)?/;
-// 这些事件会 fetch 并整合远程；其余事件只提交和推送
-const FULL_EVENTS: SyncEvent[] = ["onLoad", "onRetry", "onResolve"];
+// 这些事件会 fetch 并整合远程；其余事件只提交和推送（push 被拒时也会整合）
+const FULL_EVENTS: SyncEvent[] = ["onLoad", "onRetry", "onResolve", "onCron"];
 // 状态目录中以此开头的都是临时产物，启动时可安全删除
 const TEMP_PREFIX = ".omg.";
 const PENDING = `${TEMP_PREFIX}pending.json`;
@@ -206,18 +206,21 @@ export class GitSyncEngine {
     await this.unstage(oversized.map(file => file.path));
     return oversized;
   }
-  // 只维护 OGIT 区块，不动用户自己的规则
-  private async ensureAttributes(cwd: string): Promise<void> {
+  // 只维护 OGIT 区块，不动用户自己的规则；返回是否改写了文件
+  private async ensureAttributes(cwd: string): Promise<boolean> {
     const file = path.join(cwd, ".gitattributes");
     const text = await fs.readFile(file, "utf8").catch(() => "");
     const updated = LFS_BLOCK.test(text) ? text.replace(LFS_BLOCK, () => this.lfsRules)
       : text + (text && !text.endsWith("\n") ? "\n" : "") + this.lfsRules;
-    if (updated !== text) await fs.writeFile(file, updated);
+    if (updated === text) return false;
+    await fs.writeFile(file, updated);
+    return true;
   }
   private async stageAll(cwd: string): Promise<void> {
-    await this.ensureAttributes(cwd);
+    const changed = await this.ensureAttributes(cwd);
     await this.git(["add", "-A"], cwd);
-    await this.git(["add", "--renormalize", "."], cwd);
+    // renormalize 会重读全部已跟踪文件，只在 LFS 规则变化时执行
+    if (changed) await this.git(["add", "--renormalize", "."], cwd);
   }
 
   private async snapshot(): Promise<{ head: string; skipped: OversizedFile[] }> {
@@ -267,8 +270,26 @@ export class GitSyncEngine {
     return refs;
   }
 
-  private async integrate(local: string, remote: string, strategy?: Strategy, reason?: string): Promise<string> {
-    const refs = await this.protect(strategy ? `keep-${strategy}` : "startup-merge", local, remote);
+  // 本地领先或相同：不动；落后：快进（双方都已在 upstream 上，无需恢复分支）；分叉：保护双方后合并
+  private async reconcile(local: string, remote: string, label: string): Promise<string> {
+    if (await this.isAncestor(remote, local)) return local;
+    if (await this.isAncestor(local, remote)) {
+      await this.apply(local, remote);
+      return remote;
+    }
+    return this.integrate(local, remote, label);
+  }
+  // 把 Vault 从 local 推进到 result
+  private async apply(local: string, result: string): Promise<void> {
+    await this.phase("apply", { resultCommit: result });
+    await this.removeCollidingEmpties(result);
+    // 两树 read-tree 拒绝覆盖未提交修改和未跟踪文件；不在 Vault 中 reset --hard
+    await this.git(["read-tree", "-m", "-u", local, result]);
+    await this.gitAlways(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
+    await this.phase("applied");
+  }
+  private async integrate(local: string, remote: string, label: string, strategy?: Strategy, reason?: string): Promise<string> {
+    const refs = await this.protect(label, local, remote);
     const temp = path.join(this.stateDir, `${TEMP_PREFIX}worktree-${randomBytes(6).toString("hex")}`);
     await this.phase("merge", { temporaryWorktree: temp });
     await this.git(["worktree", "add", "--detach", temp, strategy ? remote : local]);
@@ -276,22 +297,14 @@ export class GitSyncEngine {
       const result = strategy ? await this.choose(temp, local, remote, strategy, reason, refs) : await this.merge(temp, local, remote, refs);
       // 结果也保留独立分支，应用或推送失败时仍可找回
       await this.git(["update-ref", refs.localRecoveryRef.replace(/local$/, "result"), result, ZERO]);
-      await this.phase("apply", { resultCommit: result });
-      await this.removeCollidingEmpties(result);
-      // 两树 read-tree 拒绝覆盖未提交修改和未跟踪文件；不在 Vault 中 reset --hard
-      await this.git(["read-tree", "-m", "-u", local, result]);
-      await this.gitAlways(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
-      await this.phase("applied");
+      await this.apply(local, result);
       return result;
     } finally {
       await this.gitAlways(["worktree", "remove", "--force", temp]).catch(() => "");
     }
   }
+  // 仅用于已分叉的历史；快进由 reconcile 处理
   private async merge(temp: string, local: string, remote: string, refs: RecoveryRefs): Promise<string> {
-    if (await this.isAncestor(local, remote)) {
-      await this.git(["merge", "--ff-only", remote], temp);
-      return remote;
-    }
     if (!(await this.tryGit(["merge-base", local, remote], temp))) throw new SyncError("conflict", "Local and remote histories are unrelated");
     try { await this.git(["merge", "--no-commit", "--no-ff", remote], temp); }
     catch (error) {
@@ -299,7 +312,7 @@ export class GitSyncEngine {
       if (error instanceof GitError && error.exitCode === 1 && await this.git(["ls-files", "-u"], temp)) throw new SyncError("conflict", error.message);
       throw error;
     }
-    return this.commit("ogit: merge upstream on startup",
+    return this.commit("ogit: merge upstream",
       this.metadata("merge", { localCommit: local, remoteCommit: remote, ...refs }), temp);
   }
   // 整仓库选一侧；以 upstream 为第一父提交，未包含本地历史时以本地为第二父提交
@@ -315,18 +328,30 @@ export class GitSyncEngine {
     }), temp);
   }
 
-  private async push(local: string): Promise<void> {
+  // 返回最终推送的提交；无新提交时不访问远程
+  private async push(local: string): Promise<string> {
     const c = this.context;
+    if (local === await this.git(["rev-parse", c.upstream])) return local;
     await this.phase("push", { resultCommit: local });
     try {
       await this.pushRefs([`${local}:${c.remoteRef}`]);
+      return local;
     } catch (error) {
       if (!(error instanceof SyncError) || error.code !== "refused") throw error;
-      // 被拒绝且远程已分叉：保护双方，交给用户选择；未分叉则是服务端策略拒绝
+      // 远程未前进则是服务端策略拒绝；前进了就整合后重推一次，内容冲突时 merge 抛 conflict
       const remote = await this.fetch();
       if (await this.isAncestor(remote, local)) throw error;
-      await this.protect("push-rejected", local, remote);
-      throw new SyncError("conflict", "Remote advanced; push rejected");
+      const result = await this.reconcile(local, remote, "push-rejected");
+      await this.phase("push", { resultCommit: result });
+      try { await this.pushRefs([`${result}:${c.remoteRef}`]); }
+      catch (retry) {
+        // 重推期间远程又前进：其他设备在抢推送，不是服务端拒绝，下次同步再整合
+        if (retry instanceof SyncError && retry.code === "refused" && !(await this.isAncestor(await this.fetch(), result))) {
+          throw new SyncError("remote", "Remote advanced again during push retry");
+        }
+        throw retry;
+      }
+      return result;
     }
   }
   // 每月首次成功推送后创建一次；已存在则不覆盖。失败只记日志，下次同步再试
@@ -381,10 +406,11 @@ export class GitSyncEngine {
       if (FULL_EVENTS.includes(event)) {
         const remote = await this.fetch();
         await this.phase("fetched", { remoteCommit: remote });
-        if (event === "onResolve") local = await this.integrate(local, remote, details?.strategy, details?.reason);
-        else if (!(await this.isAncestor(remote, local))) local = await this.integrate(local, remote);
+        local = event === "onResolve" && details?.strategy
+          ? await this.integrate(local, remote, `keep-${details.strategy}`, details.strategy, details.reason)
+          : await this.reconcile(local, remote, "merge");
       }
-      await this.push(local);
+      local = await this.push(local);
       await this.monthly(local);
       this.journal.outcome = "success";
       return { skipped: snapshot.skipped };
