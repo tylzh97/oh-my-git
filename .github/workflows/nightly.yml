@@ -1,4 +1,4 @@
-# main 每次更新（由 CNB 镜像推送）后测试、构建，并滚动发布到 nightly 预发布版本
+# main 每次更新（由 CNB 镜像推送）后测试、构建，并滚动发布 nightly 版本
 name: nightly
 
 on:
@@ -26,13 +26,17 @@ jobs:
       - run: npm ci
       # 集成测试需要 git-lfs，ubuntu runner 已自带
       - run: npm test
-      # 删除旧 release 及 tag 后在当前 commit 重建，tag 始终指向最新构建
+      # 删除旧 release 及 tag 后在当前 commit 重建，tag 始终指向最新构建。
+      # 仓库主页的 Releases 侧栏只显示 Latest，而预发布不能是 Latest：
+      # 还没有正式版时把 nightly 发成 Latest；有了正式版就发成预发布，把 Latest 留给正式版
       - name: publish nightly
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release delete nightly --cleanup-tag --yes || true
+          stable=$(gh release list --exclude-drafts --exclude-pre-releases --json tagName --jq 'map(select(.tagName != "nightly")) | length')
+          if [ "$stable" = 0 ]; then kind=--latest; else kind=--prerelease; fi
           gh release create nightly \
             dist/main.js dist/manifest.json dist/config.jsonc dist/scripts/setup-git.cmd dist/scripts/prune-recovery.cjs \
-            --prerelease --target "$GITHUB_SHA" --title "nightly" \
+            "$kind" --target "$GITHUB_SHA" --title "nightly" \
             --notes "Built from ${GITHUB_SHA} at $(date -u +%Y-%m-%dT%H:%M:%SZ)"

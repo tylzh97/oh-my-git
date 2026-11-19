@@ -48,7 +48,7 @@ npm test
 
 ## 发版
 
-**nightly**：`main` 每次更新后，CNB 流水线（`.cnb.yml`）自动测试、构建，把 `nightly` 这个 Tag 移到最新提交，并重建同名的预发布版本，附件为 `dist/` 的全部文件。GitHub 镜像上的 nightly 由 `.github/workflows/nightly.yml` 另行发布。
+**nightly**：`main` 每次更新后，CNB 流水线（`.cnb.yml`）自动测试、构建，把 `nightly` 这个 Tag 移到最新提交，并重建同名的预发布版本，附件为 `dist/` 的全部文件。GitHub 镜像上的 nightly 由 `.github/workflows/nightly.yml` 另行发布：还没有正式版时它被标为 Latest，这样仓库主页的 Releases 侧栏能直接看到；发布第一个正式版后，下一次构建起改回预发布，Latest 留给正式版。
 
 **正式版**：
 
