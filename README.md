@@ -36,8 +36,10 @@ tests/
   sync.cjs      # 临时仓库中的同步与数据保护
   config.cjs    # 配置及 Git 错误信息
   setup.cjs     # setup-git.cmd 的 sh 部分
+  prune.cjs     # prune-recovery.cjs 的列出与删除
 scripts/
   read-record.cjs  # 只读解析提交元数据
+  prune-recovery.cjs # 手动清理旧的恢复分支
   setup-git.cmd    # 手动执行的 Vault Git 配置脚本（cmd/sh 双语）
 config.jsonc       # 带注释的默认配置，同时打包进 main.js
 dist/              # 构建产物，即分发内容（不入库）
@@ -45,6 +47,7 @@ dist/              # 构建产物，即分发内容（不入库）
   main.js
   config.jsonc
   scripts/read-record.cjs
+  scripts/prune-recovery.cjs
   scripts/setup-git.cmd
 ```
 
@@ -53,7 +56,7 @@ dist/              # 构建产物，即分发内容（不入库）
 从社区插件市场安装：只会下载 `main.js` 和 `manifest.json`。需要改配置时，从本仓库复制 `config.jsonc` 到 `<Vault>/.obsidian/plugins/oh-my-git/` 再修改；需要审计工具时同样复制 `scripts/read-record.cjs`。
 
 手动安装：执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/oh-my-git/`，最后在 Obsidian 里启用插件。
-其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具，`scripts/setup-git.cmd` 是可选的 Git 配置脚本。
+其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具，`scripts/prune-recovery.cjs` 是可选的恢复分支清理工具，`scripts/setup-git.cmd` 是可选的 Git 配置脚本。
 源码仓库应放在 Vault 之外，否则源码会被插件同步进笔记仓库。
 
 ## 发版
@@ -162,6 +165,18 @@ Obsidian 启动时会自动创建当天的空日记。如果另一台设备已�
 - `ogit/monthly/YYYY-MM/<安全分支名>-<分支名 SHA256 前8位>`
 
 每月首次成功推送后创建当月的备份分支（月份按本地时区），已存在的不会覆盖（create-only lease）。失败只记日志，下次同步再试，不影响主线同步结果；state.json 损坏同样只影响月度备份，修正或删除该文件后重试。恢复分支不会自动删除。
+
+### 清理恢复分支
+
+每次分叉整合都会新增一组恢复分支，长期使用后可以手动清理。在插件目录执行：
+
+```text
+node scripts/prune-recovery.cjs [Vault路径] [天数=90] [--delete]
+```
+
+- 默认只列出早于指定天数的 `ogit/recovery/*` 分支（当前分支 upstream 所在的远程，以及本地），不删除；加 `--delete` 才删除，删除后无法撤销。
+- 年龄只取自分支名里的 UTC 时间，**不检查**这些提交是否已合入主线；名字无法解析的分支保留。`ogit/monthly/*` 不受影响。
+- 整合成功并推送后，双方提交都是结果提交的父提交，恢复分支只是冗余；整合失败后一直没有解决的那些才是唯一副本，删除前先看列表。
 
 ## 提交大小与 LFS
 
