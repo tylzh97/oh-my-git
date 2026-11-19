@@ -23,6 +23,7 @@ async function expectCode(fn,code) { await assert.rejects(fn,e=>e.code===code); 
 async function remoteCommit(f,file,text) { git(f.peer,'pull','--ff-only');await commit(f.peer,file,text);git(f.peer,'push'); }
 function refs(f,prefix='refs/heads/ogit') { return git(f.remote,'for-each-ref','--format=%(refname)',prefix); }
 function metadata(cwd,rev) { return JSON.parse(git(cwd,'log','-1','--format=%B',rev).split('Ogit-Metadata-Begin\n')[1].split('\nOgit-Metadata-End')[0]); }
+function lfsStored(f,content) { const oid=require('node:crypto').createHash('sha256').update(content).digest('hex');return fs.stat(path.join(f.local,'.git/lfs/objects',oid.slice(0,2),oid.slice(2,4),oid)).then(()=>true,()=>false); }
 function assertMerged(f) { assert.notEqual(git(f.remote,'rev-list','--min-parents=2','--max-count=1','main'),''); }
 
 async function basics() {
@@ -226,10 +227,9 @@ async function sizes() {
  for (const name of ['never-added[1].bin','never-added[1].png']) {
   const content=Buffer.alloc(limit+7,71);await write(f.local,name,content);
   const oid=git(f.local,'hash-object','--no-filters','--',name);
-  const lfsOid=require('node:crypto').createHash('sha256').update(content).digest('hex');
   const result=await run(f,'onSave');assert.equal(result.skipped[0].path,name);
   assert.throws(()=>git(f.local,'cat-file','-e',oid));
-  assert.equal(await fs.stat(path.join(f.local,'.git/lfs/objects',lfsOid.slice(0,2),lfsOid.slice(2,4),lfsOid)).then(()=>true,()=>false),false);
+  assert.equal(await lfsStored(f,content),false);
   await fs.rm(path.join(f.local,name));
  }
  await write(f.local,'staged.bin',Buffer.alloc(limit+8,72));git(f.local,'add','staged.bin');
@@ -240,6 +240,8 @@ async function sizes() {
    // 修改为超限：该文件跳过，其余内容照常提交推送
    await write(f.local,name,Buffer.alloc(limit+1,66));await write(f.local,'small.md',name);
    assert.deepEqual((await run(f,'onSave')).skipped,[{path:name,bytes:limit+1}]);
+   // 已跟踪文件改成超限后，新内容同样不能进入 LFS 对象库：筛选阶段不运行 clean 过滤器
+   assert.equal(await lfsStored(f,Buffer.alloc(limit+1,66)),false);
    assert.equal(git(f.remote,'show','main:small.md'),name);assert.equal(git(f.local,'diff','--name-only','-z','--',name),`${name}\0`);assert.equal(git(f.local,'diff','--cached','--name-only'),'');
    await fs.rm(path.join(f.local,name));assert.deepEqual((await run(f,'onSave')).skipped,[]);
  }
@@ -249,6 +251,9 @@ async function sizes() {
  git(f.peer,'pull','--ff-only');await write(f.peer,'remote-big.bin',Buffer.alloc(limit+5,68));git(f.peer,'add','remote-big.bin');git(f.peer,'commit','-m','test: big');git(f.peer,'push');
  await write(f.local,'local.md','local\n');assert.deepEqual((await run(f,'onLoad')).skipped,[]);assertMerged(f);
  assert.equal((await fs.stat(path.join(f.local,'remote-big.bin'))).size,limit+5);
+ // 只是时间戳变了、内容没变：不算修改，不跳过
+ const later=new Date(Date.now()+60000);await fs.utimes(path.join(f.local,'remote-big.bin'),later,later);
+ assert.deepEqual((await run(f,'onSave')).skipped,[]);
  await write(f.local,'remote-big.bin',Buffer.alloc(limit+6,69));assert.equal((await run(f,'onSave')).skipped[0].path,'remote-big.bin');
  console.log('PASS oversized new/modified files skipped while the rest syncs, remote big files merge freely');
 }

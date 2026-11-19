@@ -178,8 +178,11 @@ export class GitSyncEngine {
   // 在 add / LFS clean 前筛掉超限文件；已有历史中未修改的大文件不受影响
   private async skipOversized(): Promise<OversizedFile[]> {
     const limit = this.config.maxFileMiB * 1024 * 1024;
+    // 不用 git diff：它为确认内容会对每个改动文件运行 clean 过滤器，把超限的 LFS 文件整个读一遍并存进 .git/lfs/objects。
+    // refresh 只读大小没变的文件（时间戳变了但内容没变的在这里恢复为未修改），大小变了的直接算已修改；之后 diff-index 只看 stat
+    await this.git(["update-index", "-q", "--refresh"]);
     const changed = new Set([
-      ...((await this.git(["diff", "HEAD", "--no-renames", "--name-only", "-z"])).split("\0")),
+      ...((await this.git(["diff-index", "--name-only", "-z", "HEAD"])).split("\0")),
       ...((await this.git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0")),
     ].filter(Boolean));
     const oversized: OversizedFile[] = [];
