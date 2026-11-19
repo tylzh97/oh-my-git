@@ -38,7 +38,6 @@ tests/
   setup.cjs     # setup-git.cmd 的 sh 部分
   prune.cjs     # prune-recovery.cjs 的列出与删除
 scripts/
-  read-record.cjs  # 只读解析提交元数据
   prune-recovery.cjs # 手动清理旧的恢复分支
   setup-git.cmd    # 手动执行的 Vault Git 配置脚本（cmd/sh 双语）
 config.jsonc       # 带注释的默认配置，同时打包进 main.js
@@ -46,17 +45,16 @@ dist/              # 构建产物，即分发内容（不入库）
   manifest.json
   main.js
   config.jsonc
-  scripts/read-record.cjs
   scripts/prune-recovery.cjs
   scripts/setup-git.cmd
 ```
 
 ## 安装
 
-从社区插件市场安装：只会下载 `main.js` 和 `manifest.json`。需要改配置时，从本仓库复制 `config.jsonc` 到 `<Vault>/.obsidian/plugins/oh-my-git/` 再修改；需要审计工具时同样复制 `scripts/read-record.cjs`。
+从社区插件市场安装：只会下载 `main.js` 和 `manifest.json`。需要改配置时，从本仓库复制 `config.jsonc` 到 `<Vault>/.obsidian/plugins/oh-my-git/` 再修改。
 
 手动安装：执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/oh-my-git/`，最后在 Obsidian 里启用插件。
-其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/read-record.cjs` 是可选的审计工具，`scripts/prune-recovery.cjs` 是可选的恢复分支清理工具，`scripts/setup-git.cmd` 是可选的 Git 配置脚本。
+其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/prune-recovery.cjs` 是可选的恢复分支清理工具，`scripts/setup-git.cmd` 是可选的 Git 配置脚本。
 源码仓库应放在 Vault 之外，否则源码会被插件同步进笔记仓库。
 
 ## 发版
@@ -190,7 +188,7 @@ node scripts/prune-recovery.cjs [Vault路径] [天数=90] [--delete]
 
 提交标题固定为英文，正文中用 Ogit-Metadata-Begin / Ogit-Metadata-End 包围一段 JSON：operationId、event、action、device、time、branch、upstream；整合提交还包含 localCommit、remoteCommit、两个恢复分支名，选边提交另有 strategy。
 
-只读解析：在插件目录执行 `node scripts/read-record.cjs <提交ID> [Vault路径]`。
+查看某个提交的元数据：`git show -s --format=%B <提交ID>`。
 查看已推送的快照：`git show <恢复分支>:<文件路径>`。LFS 文件显示的是指针，恢复二进制需要在独立 worktree 中执行 lfs pull。
 
 ## 操作记录
