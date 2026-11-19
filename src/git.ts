@@ -31,7 +31,11 @@ export function runGit(args: string[], cwd: string, timeoutMs: number, input?: s
       if (!error) return resolve(stdout.trimEnd());
       // 可执行文件不存在：进程根本没启动，与 Git 自身的失败区分开
       if (error.code === "ENOENT") return reject(new SyncError("nogit", `git not found in PATH: ${PATH}`));
-      reject(new GitError(args, typeof error.code === "number" ? error.code : null, stdout, stderr));
+      // Node 自己终止子进程只有两种情况：超时，或输出超过 maxBuffer（此时 code 为字符串）。
+      // 超时没有退出码，也常常没有输出，不说明的话日志里只有 exit null
+      const timedOut = error.killed && typeof error.code !== "string";
+      reject(new GitError(args, typeof error.code === "number" ? error.code : null, stdout,
+        timedOut ? `${stderr}\ntimed out after ${timeoutMs / 1000}s` : stderr));
     });
     if (input !== undefined) child.stdin?.end(input);
   });
