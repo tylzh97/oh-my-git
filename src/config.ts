@@ -5,10 +5,10 @@ export interface SyncConfig {
   syncIntervalSeconds: number;
   saveDebounceSeconds: number;
   gitTimeoutSeconds: number;
+  networkTimeoutSeconds: number;
   maxFileMiB: number;
   successDisplayMs: number;
-  escalateAfterFailures: number;
-  placeboMode: "default" | "hidden";
+  saveHook: "command" | "keydown";
   monthlyBackupEnabled: boolean;
   lfsExtensions: string[];
 }

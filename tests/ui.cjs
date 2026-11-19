@@ -29,7 +29,7 @@ const button = {
   getBoundingClientRect() { return { left: 0, top: 0 }; },
 };
 const sdk = {
-  Plugin: class {}, FileSystemAdapter, FileView: class {}, TFile: class {}, Menu,
+  Plugin: class {}, FileSystemAdapter, TFile: class {}, Menu,
   getLanguage() { return language; }, setIcon(_, value) { icon = value; }, setTooltip(_, value) { tooltip = value; },
 };
 const context = {
@@ -53,7 +53,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   p.saveCalls = []; p.saveCommand = { id: 'editor:save-file', checkCallback(checking) { p.saveCalls.push(checking); return true; } };
   p.app = {
     vault: { adapter, configDir: '.custom', on(name, fn) { p.vaultEvents[name] = fn; return {}; } },
-    workspace: { on(name, fn) { p.workspaceEvents[name] = fn; return {}; }, onLayoutReady(fn) { fn(); }, iterateAllLeaves() {} },
+    workspace: { on(name, fn) { p.workspaceEvents[name] = fn; return {}; }, onLayoutReady(fn) { fn(); } },
     commands: { commands: { 'editor:save-file': p.saveCommand } },
   };
   p.addStatusBarItem = () => button;
@@ -82,7 +82,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
     await q.sync('onClick'); assert.equal(q.state, 'error'); assert.ok(tooltip.includes(text));
   }
   const blocked = requests.length;
-  for (const event of ['onClick', 'onLoad', 'onOpen', 'onSave', 'onClose', 'onCron']) await p.sync(event);
+  for (const event of ['onClick', 'onLoad', 'onSave', 'onRename', 'onCron']) await p.sync(event);
   assert.equal(requests.length, blocked);
   p.activate(); assert.deepEqual(p.menu.items.map(item => item.title), ['重试']);
   p.menu.items[0].click(); await tick(); assert.equal(requests.at(-1).event, 'onRetry');
@@ -103,30 +103,28 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   await w.sync('onLoad'); assert.equal(w.state, 'warning'); assert.equal(icon, 'triangle-alert');
   assert.equal(color, 'var(--text-warning)'); assert.ok(tooltip.includes('后续同步正常触发'));
   assert.ok(logs.some(args => args[1]?.message === 'git push: Connection reset'));
-  for (const event of ['onOpen', 'onSave', 'onClose']) {
+  for (const event of ['onRename', 'onSave', 'onClick']) {
     const count = requests.length;
     await w.sync(event);
     assert.equal(requests.length, count + 1); assert.equal(requests.at(-1).event, event); assert.equal(w.state, 'warning');
   }
   language = 'en'; w.render(); assert.ok(tooltip.includes('normal sync remains available'));
   w.activate(); await tick(); assert.equal(requests.at(-1).event, 'onClick'); assert.equal(w.menu, undefined);
-  assert.equal(w.state, 'error'); // 第 5 次连续失败
+  assert.equal(w.state, 'warning'); // 连续失败不升级
   w.engine = { async run(event, details) { requests.push({ event, details }); return ok; } };
   await w.sync('onCron'); assert.equal(w.state, 'idle'); assert.equal(icon, 'refresh-cw');
   w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('repo'); } };
   await w.sync('onCron'); assert.equal(w.state, 'error'); const stopped = requests.length;
   await w.sync('onCron'); assert.equal(requests.length, stopped);
 
-  // 非阻塞失败（remote/failed）连续 5 次显示 ×，但普通事件仍然执行；成功一次清零
+  // 非阻塞失败（remote/failed）始终显示 !，不升级为 ×；普通事件仍然执行
   language = 'zh'; const r = plugin();
   r.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('remote', 'git fetch: Could not resolve host'); } };
-  for (let i = 1; i <= 4; i++) { await r.sync('onCron'); assert.equal(r.state, 'warning'); }
+  for (let i = 1; i <= 6; i++) { await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(icon, 'triangle-alert'); }
   r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('failed'); };
-  await r.sync('onOpen'); assert.equal(r.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('连续多次失败') && tooltip.includes('(5)'));
-  const escalated = requests.length; await r.sync('onSave'); assert.equal(requests.length, escalated + 1); assert.equal(r.state, 'error');
-  r.activate(); assert.deepEqual(r.menu.items.map(item => item.title), ['重试']); r.menu.hide();
+  const repeated = requests.length; await r.sync('onSave'); assert.equal(requests.length, repeated + 1); assert.equal(r.state, 'warning');
   r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };
-  await r.sync('onCron'); assert.equal(r.state, 'idle'); assert.equal(r.failures, 0);
+  await r.sync('onCron'); assert.equal(r.state, 'idle');
   r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('remote'); };
   await r.sync('onCron'); assert.equal(r.state, 'warning');
 
@@ -136,9 +134,9 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };
   await r.sync('onSave'); assert.equal(r.state, 'idle');
 
-  // 跳过超限文件：同步成功，显示 ! 和文件列表，计数清零，不阻塞
+  // 跳过超限文件：同步成功，显示 ! 和文件列表，不阻塞
   r.engine.run = async (event, details) => { requests.push({ event, details }); return { skipped: [{ path: 'big.mp4', bytes: 40 * 1024 * 1024 }] }; };
-  await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(r.failures, 0);
+  await r.sync('onCron'); assert.equal(r.state, 'warning');
   assert.ok(tooltip.includes('已跳过') && tooltip.includes('big.mp4 (40.00 MiB)')); assert.ok(!tooltip.includes('上次同步失败'));
   const sizeCount = requests.length; await r.sync('onSave'); assert.equal(requests.length, sizeCount + 1);
 
@@ -163,64 +161,60 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   await busy.sync('onCron'); assert.equal(requests.length, busyCount);
   complete(ok); await tick(); assert.equal(busy.state, 'success'); assert.equal(icon, 'check');
   await busy.sync('onRetry'); assert.equal(requests.length, busyCount);
-  await active; assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
+  // 忙时及成功显示期间的事件合并为一次完整同步
+  busy.engine.run = async event => { requests.push({ event }); return ok; };
+  await active; assert.equal(busy.task, undefined); assert.equal(requests.length, busyCount);
+  await sleep(80); assert.equal(requests.length, busyCount + 1); assert.equal(requests.at(-1).event, 'onRetry');
+  assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
+
+  // 阻塞失败和卸载不自动补跑；普通失败仍允许补跑
+  for (const outcome of ['conflict','remote','unload']) {
+    const queued = plugin(); let finish;
+    const events = [];
+    queued.engine = { run(event) { events.push(event); return new Promise((resolve,reject) => { finish = () => outcome === 'unload' ? resolve(ok) : reject(new SyncError(outcome)); }); } };
+    const running = queued.sync('onSave'); await queued.sync('onRename'); await queued.sync('onSave');
+    queued.engine.run = async event => { events.push(event); return ok; };
+    if (outcome === 'unload') queued.onunload();
+    finish(); await running; await sleep(10);
+    assert.deepEqual(events, outcome === 'remote' ? ['onSave','onCron'] : ['onSave']);
+    queued.onunload();
+  }
 
   let configPath;
   const adapter = new FileSystemAdapter(); adapter.exists = async file => { configPath = file; return true; };
-  adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1,"placeboMode":"default"}';
+  adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1,"saveHook":"keydown"}';
   const loaded = startup(adapter); await loaded.onload();
   assert.equal(configPath, '.custom/plugins/renamed/config.jsonc'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
   cron(); assert.equal(requests.at(-1).event, 'onCron');
-  // 日记目录取自 <configDir>/daily-notes.json，去掉首尾斜杠；读不到时为空
-  const diaryAdapter = new FileSystemAdapter();
-  diaryAdapter.read = async file => file === '.custom/daily-notes.json' ? '{"folder":"/Journal/Daily/"}' : '{}';
-  const diary = startup(diaryAdapter); await diary.onload(); assert.equal(diary.engine.diaryDir, 'Journal/Daily'); diary.onunload();
-  assert.equal(loaded.engine.diaryDir, '');
   loaded.vaultEvents.rename({ path: 'new.md' }, 'old.md');
   assert.equal(requests.at(-1).event, 'onRename'); assert.equal(requests.at(-1).details.path, 'new.md');
   assert.equal(requests.at(-1).details.source, 'vault:rename from old.md');
 
-  // Ctrl/Cmd+S 安慰剂：只改状态栏，不调用 engine；! 和 × 下不响应；真实同步可接管
-  loaded.config = { ...loaded.config, successDisplayMs: 200 };
-  const placeboCount = requests.length;
-  // 方案 A：监听 window 捕获阶段，不再监听 document；弹出窗口打开时同样注册
+  // 公开按键监听保留输入法和弹出窗口支持，不拦截 Obsidian 自己的保存
   assert.equal(loaded.keyTargets.length, 1); assert.equal(loaded.keyTargets[0].target, context.window); assert.equal(loaded.keyTargets[0].capture, true);
   const popout = {}; loaded.workspaceEvents['window-open']({}, popout);
   assert.equal(loaded.keyTargets[1].target, popout); assert.equal(loaded.keyTargets[1].capture, true);
-  assert.equal(typeof loaded.saveCommand.checkCallback, 'function'); assert.equal(loaded.saveCommand.checkCallback.name, 'checkCallback');
-  loaded.saveKey({ ctrlKey: true, key: 'a', code: 'KeyA' }); assert.equal(loaded.state, 'idle');
-  loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(loaded.state, 'idle');
-  // 输入法开启时 key 为 Process，按物理键位识别
-  loaded.saveKey({ ctrlKey: true, key: 'Process', code: 'KeyS' }); assert.equal(loaded.state, 'syncing');
+  loaded.saveKey({ ctrlKey: true, key: 'a', code: 'KeyA' });
+  const quiet = requests.length; loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(requests.length, quiet);
+  loaded.saveKey({ ctrlKey: true, key: 'Process', code: 'KeyS' });
+  assert.equal(requests.at(-1).event, 'onManualSave'); assert.equal(loaded.state, 'idle');
   assert.ok(logs.some(args => args[0].includes('Save shortcut detected') && args[1].code === 'KeyS'));
-  await sleep(900); assert.equal(loaded.state, 'idle');
-  loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, 'syncing'); assert.equal(icon, 'refresh-cw');
-  await sleep(650); assert.equal(loaded.state, 'success'); assert.equal(icon, 'check');
-  await sleep(250); assert.equal(loaded.state, 'idle'); assert.equal(requests.length, placeboCount);
-  loaded.saveKey({ metaKey: true, key: 'S' }); assert.equal(loaded.state, 'syncing'); await sleep(900); assert.equal(loaded.state, 'idle');
-  for (const blocked of ['warning', 'error']) { loaded.state = blocked; loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, blocked); }
-  assert.ok(logs.some(args => args[0].includes('Placebo skipped') && args[1].state === 'error'));
-  loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' });
-  loaded.engine = { async run(event) { requests.push({ event }); throw new SyncError('failed'); } };
-  await loaded.sync('onCron'); assert.equal(loaded.state, 'warning');
-  await sleep(900); assert.equal(loaded.state, 'warning'); assert.equal(icon, 'triangle-alert');
-  loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' }); loaded.onunload(); await sleep(900); assert.equal(loaded.state, 'syncing');
+  loaded.onunload();
   const fallback = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); await fallback.onload();
   assert.equal(intervalMs, 300000);
 
-  // 方案 B（默认配置 hidden）：包装内部保存命令，不监听按键；checking=true 只是询问，不触发安慰剂
+  // command 模式先执行原保存；checking=true 只是询问，卸载恢复原回调
   assert.equal(fallback.keyTargets.length, 0);
-  fallback.config = { ...fallback.config, successDisplayMs: 0 };
   const original = fallback.saveCommand.checkCallback; assert.notEqual(original.name, 'checkCallback');
-  assert.equal(fallback.saveCommand.checkCallback(true), true); assert.equal(fallback.state, 'idle');
-  assert.equal(fallback.saveCommand.checkCallback(false), true); assert.equal(fallback.state, 'syncing');
+  const beforeChecking = requests.length;
+  assert.equal(fallback.saveCommand.checkCallback(true), true); assert.equal(requests.length, beforeChecking);
+  assert.equal(fallback.saveCommand.checkCallback(false), true); assert.equal(fallback.state, 'idle');
+  assert.equal(requests.at(-1).event, 'onManualSave');
   assert.deepEqual([...fallback.saveCalls], [true, false]);
   assert.ok(logs.some(args => args[0].includes('Save command executed') && args[1].via === 'checkCallback'));
-  await sleep(700); assert.equal(fallback.state, 'idle');
-  fallback.state = 'warning'; fallback.saveCommand.checkCallback(false); assert.equal(fallback.state, 'warning'); fallback.state = 'idle';
   fallback.onunload(); fallback.cleanups.forEach(fn => fn());
-  assert.equal(fallback.saveCommand.checkCallback.name, 'checkCallback'); // 卸载后恢复原回调
+  assert.equal(fallback.saveCommand.checkCallback.name, 'checkCallback');
   const missing = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); delete missing.app.commands; await missing.onload();
   assert.ok(logs.some(args => args[0].includes('Save command not found'))); missing.onunload();
 
@@ -232,6 +226,6 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS placebo default(window capture)/hidden(save command), failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS save shortcut keydown(window capture)/command(save command), non-blocking failures, oversized warning, automatic save debounce, rename, retry/resolve, busy/cooldown requests coalesced, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
