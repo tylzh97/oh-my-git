@@ -220,6 +220,35 @@ async function ignoredCollisions() {
  console.log('PASS ignored file and file/directory collisions stop apply, retry succeeds after moving local files');
 }
 
+async function recoveryReuse() {
+ const recovery=repo=>git(repo,'for-each-ref','--format=%(refname)','refs/heads/ogit/recovery').split('\n').filter(Boolean);
+ // 分叉后应用持续失败（被忽略文件挡住写入）：自动重试复用同一组恢复分支，不随重试次数增长
+ const f=await fixture('recovery-reuse');await run(f);
+ await write(f.local,'.gitignore','private.md\n');await run(f,'onSave');await write(f.local,'private.md','local secret\n');
+ git(f.peer,'pull','--ff-only');await write(f.peer,'private.md','remote content\n');git(f.peer,'add','-f','--','private.md');git(f.peer,'commit','-m','test: incoming ignored path');git(f.peer,'push');
+ await write(f.local,'note.md','local edit\n');
+ await expectCode(()=>run(f,'onCron'),'failed');const remoteRefs=recovery(f.remote),localRefs=recovery(f.local);
+ assert.equal(remoteRefs.length,2);assert.equal(localRefs.length,3);
+ await expectCode(()=>run(f,'onCron'),'failed');assert.deepEqual(recovery(f.remote),remoteRefs);assert.deepEqual(recovery(f.local),localRefs);
+ // 本地有了新提交就是新的一对，需要新的保护
+ await write(f.local,'more.md','more\n');await expectCode(()=>run(f,'onCron'),'failed');assert.equal(recovery(f.remote).length,4);
+ // 用户移走文件后重试成功：仍复用这一组，result 指向最终应用的结果
+ await fs.rm(path.join(f.local,'private.md'));await run(f,'onRetry');assertMerged(f);
+ assert.equal(recovery(f.remote).length,4);assert.equal(recovery(f.local).length,6);
+ assert.equal(git(f.local,'rev-parse',recovery(f.local).filter(name=>name.endsWith('/result')).at(-1)),git(f.local,'rev-parse','HEAD'));
+ // 冲突后双方提交没变就选边：复用冲突时那一组，提交元数据里的分支确实指向双方提交
+ const c=await fixture('recovery-reuse-conflict');await run(c);await remoteCommit(c,'note.md','remote side\n');await write(c.local,'note.md','local side\n');
+ await expectCode(()=>run(c,'onCron'),'conflict');await expectCode(()=>run(c,'onRetry'),'conflict');assert.equal(recovery(c.remote).length,2);
+ await run(c,'onResolve','local');assert.equal(recovery(c.remote).length,2);
+ const record=metadata(c.remote,'main');
+ assert.equal(git(c.remote,'rev-parse',record.localRecoveryRef),record.localCommit);assert.equal(git(c.remote,'rev-parse',record.remoteRecoveryRef),record.remoteCommit);
+ // 恢复分支推送被拒：本地也不留下分支
+ const p=await fixture('recovery-refused');await run(p);await remoteCommit(p,'other.md','remote\n');await write(p.local,'note.md','local edit\n');
+ await hook(p.remote,'pre-receive','#!/bin/sh\nwhile read old new ref; do\ncase "$ref" in refs/heads/ogit/recovery/*) exit 1;; esac\ndone\nexit 0\n');
+ await expectCode(()=>run(p,'onCron'),'refused');assert.deepEqual(recovery(p.local),[]);
+ console.log('PASS retried integration reuses recovery refs for the same commits, new commits get a new set, refused recovery push leaves no local refs');
+}
+
 async function sizes() {
  const config={...DEFAULT_CONFIG,maxFileMiB:1},limit=1024*1024;
  const f=await fixture('size',config);await run(f);
@@ -326,6 +355,7 @@ async function main() {
  await conflicts();
  await failures();
  await ignoredCollisions();
+ await recoveryReuse();
  await sizes();
  await monthly();
  await diaries();

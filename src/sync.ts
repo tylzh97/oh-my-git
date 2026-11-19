@@ -45,6 +45,8 @@ export class GitSyncEngine {
   private device = "";
   // 上次记录的空 md 列表；不变时不重复写入 history
   private lastEmpty = "";
+  // 最近一次已推送的恢复分支及其保护的提交；同一对提交重试整合时复用
+  private protectedPair?: { local: string; remote: string; refs: RecoveryRefs };
 
   constructor(private readonly root: string, private readonly log: (event: string, details?: unknown) => void,
     stateBase = path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), ".local", "state"), "ObsidianOhMyGit"),
@@ -252,14 +254,20 @@ export class GitSyncEngine {
       throw new SyncError(rejected ? "refused" : "remote", error.message);
     }
   }
-  // 整合前把双方各推一个不可变恢复分支，推送失败则不继续
+  // 整合前把双方各推一个不可变恢复分支，推送失败则不继续。
+  // 整合失败后会被自动重试：同一对提交已保护过就复用那一组，否则每次重试都多出一组分支
   private async protect(reason: string, local: string, remote: string): Promise<RecoveryRefs> {
+    const last = this.protectedPair;
+    const reuse = last?.local === local && last.remote === remote;
     const base = `refs/heads/ogit/recovery/${reason}/${this.journal.operationId}`;
-    const refs = { localRecoveryRef: `${base}/local`, remoteRecoveryRef: `${base}/remote` };
+    const refs = reuse ? last.refs : { localRecoveryRef: `${base}/local`, remoteRecoveryRef: `${base}/remote` };
     await this.phase("backup", { localCommit: local, remoteCommit: remote, ...refs });
+    if (reuse) return refs;
+    // 先推送，成功后才建本地分支：推送失败的尝试不在本地留下分支
+    await this.pushRefs([`${local}:${refs.localRecoveryRef}`, `${remote}:${refs.remoteRecoveryRef}`]);
     await this.git(["update-ref", refs.localRecoveryRef, local, ZERO]);
     await this.git(["update-ref", refs.remoteRecoveryRef, remote, ZERO]);
-    await this.pushRefs([`${refs.localRecoveryRef}:${refs.localRecoveryRef}`, `${refs.remoteRecoveryRef}:${refs.remoteRecoveryRef}`]);
+    this.protectedPair = { local, remote, refs };
     return refs;
   }
 
@@ -304,8 +312,8 @@ export class GitSyncEngine {
     await this.net(["worktree", "add", "--detach", temp, strategy ? remote : local]);
     try {
       const result = strategy ? await this.choose(temp, local, remote, strategy, refs) : await this.merge(temp, local, remote, refs);
-      // 结果也保留独立分支，应用或推送失败时仍可找回
-      await this.git(["update-ref", refs.localRecoveryRef.replace(/local$/, "result"), result, ZERO]);
+      // 结果也保留独立分支，应用或推送失败时仍可找回；复用恢复分支的重试会覆盖上次没能应用的结果
+      await this.git(["update-ref", refs.localRecoveryRef.replace(/local$/, "result"), result]);
       await this.apply(local, result);
       return result;
     } finally {
