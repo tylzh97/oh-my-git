@@ -46,9 +46,21 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 发版
 
-1. 同步修改 `manifest.json`、`package.json` 的 `version`，并在 `versions.json` 中追加 `"<版本>": "<minAppVersion>"`。
-2. `npm test`，提交后推送到 GitHub 默认分支。
-3. 创建 GitHub Release，tag 与 `version` 完全一致（不带 `v`），附件上传 `dist/main.js` 和 `dist/manifest.json`。
+**nightly**：`main` 每次更新后，CNB 流水线（`.cnb.yml`）自动测试、构建，把 `nightly` 这个 Tag 移到最新提交，并重建同名的预发布版本，附件为 `dist/` 的全部文件。GitHub 镜像上的 nightly 由 `.github/workflows/nightly.yml` 另行发布。
+
+**正式版**：
+
+1. 同步修改 `manifest.json`、`package.json` 的 `version`，并在 `versions.json` 中追加 `"<版本>": "<minAppVersion>"`，提交并合入 `main`。
+2. 在该提交上打带附注的 Tag 并推送，Tag 与 `version` 完全一致（不带 `v`）：
+
+   ```text
+   git tag -a <版本> -m "<发布说明>"
+   git push origin <版本>
+   ```
+
+3. CNB 流水线自动完成其余步骤：校验 Tag 与上面三个文件里的版本一致，测试、构建，创建 Release（说明取 Tag 的附注信息），上传 `dist/` 的全部文件。校验或测试失败时不会创建 Release。
+
+只有数字开头的 Tag 会触发发布，流水线配置取自 Tag 所在的提交。要上架 Obsidian 社区市场，还需在 GitHub 手动创建同名 Release，附件上传 `dist/main.js` 和 `dist/manifest.json`：社区市场只从 GitHub 取文件。
 
 ## 许可证
 
