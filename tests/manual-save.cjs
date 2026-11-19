@@ -121,7 +121,7 @@ function hook(p, command) {
   resolve.engine.run = async (event, details) => { chosen = { event, ...details }; return ok; };
   await advance(1000); assert.deepEqual(chosen, { event: 'onResolve', strategy: 'remote', reason: 'conflict' }); resolve.onunload();
 
-  // hidden 模式保留原返回值、this 和参数；等异步保存完成才开始前防抖。
+  // command 模式保留原返回值、this 和参数；等异步保存完成才开始前防抖。
   const asyncSave = plugin(); let saved;
   const result = new Promise(resolve => { saved = resolve; });
   const command = { callback(...args) { assert.equal(this, command); assert.deepEqual(args, ['note']); return result; } };

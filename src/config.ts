@@ -8,7 +8,7 @@ export interface SyncConfig {
   maxFileMiB: number;
   successDisplayMs: number;
   escalateAfterFailures: number;
-  placeboMode: "default" | "hidden";
+  saveHook: "command" | "keydown";
   monthlyBackupEnabled: boolean;
   lfsExtensions: string[];
 }

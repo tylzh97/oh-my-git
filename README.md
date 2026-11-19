@@ -15,7 +15,7 @@
 | maxFileMiB | 30 | 插件提交的单文件上限，MiB |
 | successDisplayMs | 1000 | 同步结束后的防抖时长，同时为成功 √ 的显示时长，毫秒 |
 | escalateAfterFailures | 5 | 非阻塞失败连续达到此次数后显示 ×（仍不暂停同步） |
-| placeboMode | "hidden" | Ctrl/Cmd+S 真实同步的挂载方式（保留原配置名）：`default` 或 `hidden`，见「事件」 |
+| saveHook | "command" | Ctrl/Cmd+S 真实同步的挂载方式：`command` 或 `keydown`，见「事件」 |
 | monthlyBackupEnabled | true | 是否创建月度备份分支 |
 | lfsExtensions | 见配置文件 | LFS 扩展名，不含点，大小写不敏感 |
 
@@ -101,9 +101,9 @@ dist/              # 构建产物，即分发内容（不入库）
   - **后防抖为 successDisplayMs**（默认 1000ms）：从 Git 同步结束时开始，成功时在此期间显示 √。Git 任务锁已释放，但窗口内的新请求只排队，不提前开始下一次同步。
   - 有待处理请求时，下次开始时间为 `max(最后一次手动保存请求时间 + 500ms, 上次同步结束时间 + successDisplayMs)`。没有新请求则回到待机，不额外同步。
   - 同步期间及成功展示期间的新保存合并保留一次，覆盖期间的新修改。普通失败也经过后防抖；阻塞失败仍须处理后显式重试。手动同步开始时取消已有的自动保存计时器。
-  - 挂载方式由 placeboMode 决定，配置名保留，已不再模拟成功：
-    - `hidden`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原保存；若返回 Promise，等待成功后再启动前防抖，原返回值保持不变。覆盖快捷键、命令面板和自定义保存快捷键。这是**未公开 API**；找不到命令时只记日志，手动同步快捷键不生效。卸载时恢复原回调。
-    - `default`：在 `window` 捕获阶段观察 Ctrl/Cmd+S，不拦截原保存，500ms 前防抖后请求同步。兼容输入法物理键位 KeyS 和弹出窗口，仅覆盖键盘快捷键；不能等待原保存命令的异步返回值。
+  - 挂载方式由 saveHook 决定：
+    - `command`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原保存；若返回 Promise，等待成功后再启动前防抖，原返回值保持不变。覆盖快捷键、命令面板和自定义保存快捷键。这是**未公开 API**；找不到命令时只记日志，手动同步快捷键不生效。卸载时恢复原回调。
+    - `keydown`：在 `window` 捕获阶段观察 Ctrl/Cmd+S，不拦截原保存，500ms 前防抖后请求同步。兼容输入法物理键位 KeyS 和弹出窗口，仅覆盖键盘快捷键；不能等待原保存命令的异步返回值。
   - 排查时，在 Console 中过滤 `Oh My Git`，查看 `Hooked save command`、`Save command executed`、`Save shortcut detected`、`Sync queued` 和真实同步结果日志。
 - onUnload：请求取消，当前 Git 命令执行完后不再启动后续步骤。
 

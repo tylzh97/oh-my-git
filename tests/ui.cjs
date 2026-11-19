@@ -184,7 +184,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
 
   let configPath;
   const adapter = new FileSystemAdapter(); adapter.exists = async file => { configPath = file; return true; };
-  adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1,"placeboMode":"default"}';
+  adapter.read = async () => '{"syncIntervalSeconds":10,"maxFileMiB":1,"saveHook":"keydown"}';
   const loaded = startup(adapter); await loaded.onload();
   assert.equal(configPath, '.custom/plugins/renamed/config.jsonc'); assert.equal(intervalMs, 10000);
   assert.equal(loaded.engine.config.maxFileMiB, 1); assert.equal(requests.at(-1).event, 'onLoad');
@@ -211,7 +211,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   const fallback = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); await fallback.onload();
   assert.equal(intervalMs, 300000);
 
-  // hidden 模式先执行原保存；checking=true 只是询问，卸载恢复原回调
+  // command 模式先执行原保存；checking=true 只是询问，卸载恢复原回调
   assert.equal(fallback.keyTargets.length, 0);
   const original = fallback.saveCommand.checkCallback; assert.notEqual(original.name, 'checkCallback');
   const beforeChecking = requests.length;
@@ -233,6 +233,6 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS save shortcut default(window capture)/hidden(save command), failure escalation, oversized warning, automatic save debounce, rename, retry/resolve, busy/cooldown requests coalesced, bilingual UI, startup config and unload');
+  console.log('PASS save shortcut keydown(window capture)/command(save command), failure escalation, oversized warning, automatic save debounce, rename, retry/resolve, busy/cooldown requests coalesced, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

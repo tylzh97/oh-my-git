@@ -132,7 +132,7 @@ export default class OhMyGitPlugin extends Plugin {
     this.animation?.cancel();
     this.animation = this.button?.querySelector("svg")?.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], { duration: 1000, iterations: Infinity, easing: "linear" });
   }
-  // 方案 A（default）：Obsidian 快捷键系统在 window 捕获阶段处理 Mod+S 并 stopPropagation，事件到不了 document；
+  // 方案 A（keydown）：Obsidian 快捷键系统在 window 捕获阶段处理 Mod+S 并 stopPropagation，事件到不了 document；
   // 同一 window 上的其他监听器不受影响。只观察不拦截；弹出窗口有各自的 window，打开时同样注册
   private listenSaveKey(): void {
     // 同时匹配物理键位 KeyS，兼容输入法（key 为 "Process"）和非 QWERTY 布局
@@ -143,14 +143,14 @@ export default class OhMyGitPlugin extends Plugin {
     };
     this.registerDomEvent(window, "keydown", onKey, { capture: true });
     this.registerEvent(this.app.workspace.on("window-open", (_, win) => this.registerDomEvent(win, "keydown", onKey, { capture: true })));
-    this.log("Listening to save shortcut", { mode: "default" });
+    this.log("Listening to save shortcut", { mode: "keydown" });
   }
-  // 方案 B（hidden）：包装内部命令 editor:save-file（未公开 API），覆盖快捷键、命令面板和自定义快捷键。
+  // 方案 B（command）：包装内部命令 editor:save-file（未公开 API），覆盖快捷键、命令面板和自定义快捷键。
   // 先执行原逻辑，完成后登记同步请求；卸载时若包装仍在最外层才恢复，避免覆盖其他插件的包装
   private hookSaveCommand(): void {
     const registry = (this.app as unknown as { commands?: { commands?: Record<string, SaveCommand> } }).commands?.commands;
     const command = registry?.["editor:save-file"];
-    if (!command) { this.log("Save command not found; manual sync shortcut disabled", { mode: "hidden" }); return; }
+    if (!command) { this.log("Save command not found; manual sync shortcut disabled", { mode: "command" }); return; }
     const hooked: string[] = [];
     for (const key of SAVE_CALLBACKS) {
       const original = command[key];
@@ -175,7 +175,7 @@ export default class OhMyGitPlugin extends Plugin {
       this.register(() => { if (command[key] === wrapped) command[key] = original; });
       hooked.push(key);
     }
-    this.log("Hooked save command", { mode: "hidden", callbacks: hooked });
+    this.log("Hooked save command", { mode: "command", callbacks: hooked });
   }
   private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
     if (!this.enabled || !this.button || !this.engine) return;
@@ -262,7 +262,7 @@ export default class OhMyGitPlugin extends Plugin {
     this.app.workspace.onLayoutReady(() => {
       if (!this.enabled) return;
       // 布局就绪后核心命令已全部注册
-      if (this.config.placeboMode === "hidden") this.hookSaveCommand(); else this.listenSaveKey();
+      if (this.config.saveHook === "command") this.hookSaveCommand(); else this.listenSaveKey();
       this.openFiles = this.collectOpenFiles();
       this.registerEvent(this.app.workspace.on("layout-change", () => {
         const current = this.collectOpenFiles();
