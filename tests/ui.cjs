@@ -203,7 +203,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   const popout = {}; loaded.workspaceEvents['window-open']({}, popout);
   assert.equal(loaded.keyTargets[1].target, popout); assert.equal(loaded.keyTargets[1].capture, true);
   loaded.saveKey({ ctrlKey: true, key: 'a', code: 'KeyA' });
-  loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(loaded.manualSaveDue, 0);
+  const quiet = requests.length; loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(requests.length, quiet);
   loaded.saveKey({ ctrlKey: true, key: 'Process', code: 'KeyS' });
   assert.equal(requests.at(-1).event, 'onManualSave'); assert.equal(loaded.state, 'idle');
   assert.ok(logs.some(args => args[0].includes('Save shortcut detected') && args[1].code === 'KeyS'));

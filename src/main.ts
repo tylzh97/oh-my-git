@@ -15,8 +15,8 @@ export default class OhMyGitPlugin extends Plugin {
   private enabled = false;
   private button?: HTMLElement;
   private task?: AbortController;
-  private pending?: { event: SyncEvent; details?: SyncDetails };
-  private manualSaveDue = 0;
+  // 待处理的同步请求；due 是最早可开始的时间（手动保存的前防抖），0 表示不额外等待
+  private pending?: { event: SyncEvent; details?: SyncDetails; due: number };
   private cooldownUntil = 0;
   private syncTimer?: number;
   private animation?: Animation;
@@ -75,7 +75,8 @@ export default class OhMyGitPlugin extends Plugin {
     const message = `[Oh My Git] ${event} at ${new Date().toISOString()}`;
     if (details === undefined) console.log(message); else console.log(message, details);
   }
-  private trigger(event: SyncEvent, details?: SyncDetails): void { this.log(event, details); void this.sync(event, details); }
+  // due：最早可开始的时间，仅手动保存的前防抖使用
+  private trigger(event: SyncEvent, details?: SyncDetails, due = 0): void { this.log(event, details); void this.sync(event, details, due); }
   // modify 只重置计时器，静默期满后才触发一次 onSave
   private scheduleSave(path: string): void {
     window.clearTimeout(this.saveTimer);
@@ -87,21 +88,23 @@ export default class OhMyGitPlugin extends Plugin {
   // 手动保存只登记请求；原始保存仍由 Obsidian 完成。
   private scheduleManualSave(): void {
     if (!this.enabled || !this.engine || this.blocked()) return;
-    this.manualSaveDue = Date.now() + MANUAL_SAVE_DEBOUNCE_MS;
-    this.trigger("onManualSave", { source: "save-command" });
+    this.trigger("onManualSave", { source: "save-command" }, Date.now() + MANUAL_SAVE_DEBOUNCE_MS);
   }
   private canSync(event: SyncEvent, details?: SyncDetails): boolean {
     return !this.blocked() || event === "onRetry"
       || (event === "onResolve" && !!details?.strategy && this.failure?.code === "conflict");
   }
-  private queueSync(event: SyncEvent, details?: SyncDetails): void {
-    // 重试和选边保留原意；其余忙时事件合并为一次完整同步。
-    if (event === "onRetry" || event === "onResolve") this.pending = { event, details };
-    else if (this.pending?.event !== "onRetry" && this.pending?.event !== "onResolve") {
-      this.pending = this.manualSaveDue
-        ? { event: "onManualSave", details: { source: "save-command" } }
-        : { event: "onCron" };
-    }
+  private queueSync(event: SyncEvent, details?: SyncDetails, due = 0): void {
+    const explicit = (e?: SyncEvent): boolean => e === "onRetry" || e === "onResolve";
+    const old = this.pending;
+    // 重试和选边保留原意；其余事件合并为一次完整同步，排过手动保存就保持为手动保存。
+    let next: { event: SyncEvent; details?: SyncDetails };
+    if (explicit(event)) next = { event, details };
+    else if (old && explicit(old.event)) next = { event: old.event, details: old.details };
+    else if (event === "onManualSave" || old?.event === "onManualSave") next = { event: "onManualSave", details: { source: "save-command" } };
+    else next = { event: "onCron" };
+    // 前防抖只会推迟：后到的请求不能让已登记的手动保存提前
+    this.pending = { ...next, due: Math.max(due, old?.due ?? 0) };
     this.log("Sync queued", { event });
     this.schedulePending();
   }
@@ -111,13 +114,11 @@ export default class OhMyGitPlugin extends Plugin {
     if (!this.enabled || this.task) return;
     const now = Date.now();
     if (this.state === "success" && now >= this.cooldownUntil) { this.state = "idle"; this.render(); }
-    if (this.pending && !this.canSync(this.pending.event, this.pending.details)) {
-      this.pending = undefined; this.manualSaveDue = 0;
-    }
-    const due = Math.max(this.manualSaveDue, this.cooldownUntil);
+    if (this.pending && !this.canSync(this.pending.event, this.pending.details)) this.pending = undefined;
+    const due = Math.max(this.pending?.due ?? 0, this.cooldownUntil);
     if (this.pending && now >= due) {
       const pending = this.pending;
-      this.pending = undefined; this.manualSaveDue = 0;
+      this.pending = undefined;
       this.trigger(pending.event, pending.details);
       return;
     }
@@ -176,13 +177,13 @@ export default class OhMyGitPlugin extends Plugin {
     }
     this.log("Hooked save command", { mode: "command", callbacks: hooked });
   }
-  private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
+  private async sync(event: SyncEvent, details?: SyncDetails, due = 0): Promise<void> {
     if (!this.enabled || !this.button || !this.engine) return;
     if (!this.canSync(event, details)) {
       this.log("Sync dropped (error state)", { event }); return;
     }
-    if (this.task || this.pending || this.manualSaveDue || Date.now() < this.cooldownUntil) {
-      this.queueSync(event, details); return;
+    if (this.task || this.pending || due || Date.now() < this.cooldownUntil) {
+      this.queueSync(event, details, due); return;
     }
     const task = new AbortController(); this.task = task;
     window.clearTimeout(this.syncTimer); this.syncTimer = undefined;
@@ -262,7 +263,7 @@ export default class OhMyGitPlugin extends Plugin {
   onunload(): void {
     this.log("onUnload");
     this.enabled = false;
-    this.pending = undefined; this.manualSaveDue = 0;
+    this.pending = undefined;
     window.clearTimeout(this.saveTimer);
     window.clearTimeout(this.syncTimer);
     this.menu?.hide();
