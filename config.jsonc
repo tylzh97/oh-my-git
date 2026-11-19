@@ -3,17 +3,17 @@
 {
   // 定时同步（onCron）间隔，秒
   "syncIntervalSeconds": 300,
-  // 最后一次保存后静默多少秒才触发 onSave
+  // 最后一次文件修改后静默多少秒才触发自动 onSave；手动保存固定前防抖 500ms
   "saveDebounceSeconds": 30,
   // 单条 Git 命令超时，秒
   "gitTimeoutSeconds": 120,
   // 快照中新增或修改文件的大小上限，MiB；超限文件不入库，其余照常同步并显示 !
   "maxFileMiB": 30,
-  // 成功 √ 的显示时长，毫秒
+  // 同步结束后的防抖时长，同时作为成功 √ 的显示时长，毫秒
   "successDisplayMs": 1000,
   // 非阻塞失败（网络、认证等）连续达到此次数后显示 ×，仍不暂停同步；任一次成功清零
   "escalateAfterFailures": 5,
-  // Ctrl/Cmd+S 安慰剂的挂载方式：
+  // Ctrl/Cmd+S 真实同步的挂载方式（保留配置名 placeboMode）：
   //   "default"：监听 window 捕获阶段的按键（公开 API），仅覆盖键盘快捷键
   //   "hidden"：包装内部命令 editor:save-file（未公开 API，Obsidian 升级可能失效），覆盖快捷键、命令面板和自定义快捷键
   "placeboMode": "hidden",

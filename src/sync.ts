@@ -6,7 +6,7 @@ import type { Stats } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-export type SyncEvent = "onClick" | "onLoad" | "onOpen" | "onSave" | "onClose" | "onRename" | "onCron" | "onResolve" | "onRetry";
+export type SyncEvent = "onClick" | "onLoad" | "onOpen" | "onSave" | "onManualSave" | "onClose" | "onRename" | "onCron" | "onResolve" | "onRetry";
 export type Strategy = "local" | "remote";
 export interface SyncDetails { path?: string | null; source?: string; strategy?: Strategy; reason?: string }
 export interface SyncResult { skipped: OversizedFile[] }
@@ -23,7 +23,7 @@ interface Journal {
 const ZERO = "0".repeat(40);
 const LFS_BLOCK = /# BEGIN OGIT LFS\r?\n[\s\S]*?# END OGIT LFS(?:\r?\n)?/;
 // 这些事件会 fetch 并整合远程；其余事件只提交和推送（push 被拒时也会整合）
-const FULL_EVENTS: SyncEvent[] = ["onLoad", "onRetry", "onResolve", "onCron"];
+const FULL_EVENTS: SyncEvent[] = ["onLoad", "onRetry", "onResolve", "onCron", "onManualSave"];
 // 状态目录中以此开头的都是临时产物，启动时可安全删除
 const TEMP_PREFIX = ".omg.";
 const PENDING = `${TEMP_PREFIX}pending.json`;

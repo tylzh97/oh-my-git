@@ -165,8 +165,9 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   await busy.sync('onRetry'); assert.equal(requests.length, busyCount);
   // 忙时及成功显示期间的事件合并为一次完整同步
   busy.engine.run = async event => { requests.push({ event }); return ok; };
-  await active; assert.equal(requests.length, busyCount + 1); assert.equal(requests.at(-1).event, 'onCron');
-  await sleep(50); assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
+  await active; assert.equal(busy.task, undefined); assert.equal(requests.length, busyCount);
+  await sleep(80); assert.equal(requests.length, busyCount + 1); assert.equal(requests.at(-1).event, 'onRetry');
+  assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
 
   // 阻塞失败和卸载不自动补跑；普通失败仍允许补跑
   for (const outcome of ['conflict','remote','unload']) {
@@ -197,46 +198,30 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   assert.equal(requests.at(-1).event, 'onRename'); assert.equal(requests.at(-1).details.path, 'new.md');
   assert.equal(requests.at(-1).details.source, 'vault:rename from old.md');
 
-  // Ctrl/Cmd+S 安慰剂：只改状态栏，不调用 engine；! 和 × 下不响应；真实同步可接管
-  loaded.config = { ...loaded.config, successDisplayMs: 200 };
-  const placeboCount = requests.length;
-  // 方案 A：监听 window 捕获阶段，不再监听 document；弹出窗口打开时同样注册
+  // 公开按键监听保留输入法和弹出窗口支持，不拦截 Obsidian 自己的保存
   assert.equal(loaded.keyTargets.length, 1); assert.equal(loaded.keyTargets[0].target, context.window); assert.equal(loaded.keyTargets[0].capture, true);
   const popout = {}; loaded.workspaceEvents['window-open']({}, popout);
   assert.equal(loaded.keyTargets[1].target, popout); assert.equal(loaded.keyTargets[1].capture, true);
-  assert.equal(typeof loaded.saveCommand.checkCallback, 'function'); assert.equal(loaded.saveCommand.checkCallback.name, 'checkCallback');
-  loaded.saveKey({ ctrlKey: true, key: 'a', code: 'KeyA' }); assert.equal(loaded.state, 'idle');
-  loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(loaded.state, 'idle');
-  // 输入法开启时 key 为 Process，按物理键位识别
-  loaded.saveKey({ ctrlKey: true, key: 'Process', code: 'KeyS' }); assert.equal(loaded.state, 'syncing');
+  loaded.saveKey({ ctrlKey: true, key: 'a', code: 'KeyA' });
+  loaded.saveKey({ key: 's', code: 'KeyS' }); assert.equal(loaded.manualSaveDue, 0);
+  loaded.saveKey({ ctrlKey: true, key: 'Process', code: 'KeyS' });
+  assert.equal(requests.at(-1).event, 'onManualSave'); assert.equal(loaded.state, 'idle');
   assert.ok(logs.some(args => args[0].includes('Save shortcut detected') && args[1].code === 'KeyS'));
-  await sleep(900); assert.equal(loaded.state, 'idle');
-  loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, 'syncing'); assert.equal(icon, 'refresh-cw');
-  await sleep(650); assert.equal(loaded.state, 'success'); assert.equal(icon, 'check');
-  await sleep(250); assert.equal(loaded.state, 'idle'); assert.equal(requests.length, placeboCount);
-  loaded.saveKey({ metaKey: true, key: 'S' }); assert.equal(loaded.state, 'syncing'); await sleep(900); assert.equal(loaded.state, 'idle');
-  for (const blocked of ['warning', 'error']) { loaded.state = blocked; loaded.saveKey({ ctrlKey: true, key: 's' }); assert.equal(loaded.state, blocked); }
-  assert.ok(logs.some(args => args[0].includes('Placebo skipped') && args[1].state === 'error'));
-  loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' });
-  loaded.engine = { async run(event) { requests.push({ event }); throw new SyncError('failed'); } };
-  await loaded.sync('onCron'); assert.equal(loaded.state, 'warning');
-  await sleep(900); assert.equal(loaded.state, 'warning'); assert.equal(icon, 'triangle-alert');
-  loaded.state = 'idle'; loaded.saveKey({ ctrlKey: true, key: 's' }); loaded.onunload(); await sleep(900); assert.equal(loaded.state, 'syncing');
+  loaded.onunload();
   const fallback = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); await fallback.onload();
   assert.equal(intervalMs, 300000);
 
-  // 方案 B（默认配置 hidden）：包装内部保存命令，不监听按键；checking=true 只是询问，不触发安慰剂
+  // hidden 模式先执行原保存；checking=true 只是询问，卸载恢复原回调
   assert.equal(fallback.keyTargets.length, 0);
-  fallback.config = { ...fallback.config, successDisplayMs: 0 };
   const original = fallback.saveCommand.checkCallback; assert.notEqual(original.name, 'checkCallback');
-  assert.equal(fallback.saveCommand.checkCallback(true), true); assert.equal(fallback.state, 'idle');
-  assert.equal(fallback.saveCommand.checkCallback(false), true); assert.equal(fallback.state, 'syncing');
+  const beforeChecking = requests.length;
+  assert.equal(fallback.saveCommand.checkCallback(true), true); assert.equal(requests.length, beforeChecking);
+  assert.equal(fallback.saveCommand.checkCallback(false), true); assert.equal(fallback.state, 'idle');
+  assert.equal(requests.at(-1).event, 'onManualSave');
   assert.deepEqual([...fallback.saveCalls], [true, false]);
   assert.ok(logs.some(args => args[0].includes('Save command executed') && args[1].via === 'checkCallback'));
-  await sleep(700); assert.equal(fallback.state, 'idle');
-  fallback.state = 'warning'; fallback.saveCommand.checkCallback(false); assert.equal(fallback.state, 'warning'); fallback.state = 'idle';
   fallback.onunload(); fallback.cleanups.forEach(fn => fn());
-  assert.equal(fallback.saveCommand.checkCallback.name, 'checkCallback'); // 卸载后恢复原回调
+  assert.equal(fallback.saveCommand.checkCallback.name, 'checkCallback');
   const missing = startup(new FileSystemAdapter(), { id: 'oh-my-git' }); delete missing.app.commands; await missing.onload();
   assert.ok(logs.some(args => args[0].includes('Save command not found'))); missing.onunload();
 
@@ -248,6 +233,6 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS placebo default(window capture)/hidden(save command), failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success requests coalesced, bilingual UI, startup config and unload');
+  console.log('PASS save shortcut default(window capture)/hidden(save command), failure escalation, oversized warning, automatic save debounce, rename, retry/resolve, busy/cooldown requests coalesced, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

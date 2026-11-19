@@ -5,7 +5,7 @@ import { DEFAULT_CONFIG, loadConfig, type SyncConfig } from "./config";
 import { errorText, t } from "./i18n";
 
 type SyncState = "idle" | "syncing" | "success" | "warning" | "error";
-const PLACEBO_SPIN_MS = 600;
+const MANUAL_SAVE_DEBOUNCE_MS = 500;
 // 只有这些错误会暂停普通事件；其余失败不阻塞，本地快照照常进行
 const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict", "nogit", "nolfs"];
 const SAVE_CALLBACKS = ["callback", "checkCallback", "editorCallback", "editorCheckCallback"] as const;
@@ -16,7 +16,10 @@ export default class OhMyGitPlugin extends Plugin {
   private openFiles = new Set<string>();
   private button?: HTMLElement;
   private task?: AbortController;
-  private pending = false;
+  private pending?: { event: SyncEvent; details?: SyncDetails };
+  private manualSaveDue = 0;
+  private cooldownUntil = 0;
+  private syncTimer?: number;
   private animation?: Animation;
   private state: SyncState = "idle";
   private menu?: Menu;
@@ -24,7 +27,6 @@ export default class OhMyGitPlugin extends Plugin {
   private failure?: SyncError;
   private config: SyncConfig = DEFAULT_CONFIG;
   private saveTimer?: number;
-  private placeboTimer?: number;
   private failures = 0;
   private blocked(): boolean {
     return this.state === "error" && !!this.failure && BLOCKING.includes(this.failure.code);
@@ -83,30 +85,52 @@ export default class OhMyGitPlugin extends Plugin {
       this.trigger("onSave", { path, source: "vault:modify" });
     }, this.config.saveDebounceSeconds * 1000);
   }
-  private sleep(signal: AbortSignal): Promise<void> {
-    return new Promise(resolve => {
-      const done = (): void => { window.clearTimeout(timer); signal.removeEventListener("abort", done); resolve(); };
-      const timer = window.setTimeout(done, this.config.successDisplayMs); signal.addEventListener("abort", done, { once: true });
-      if (signal.aborted) done();
-    });
+  // 手动保存只登记请求；原始保存仍由 Obsidian 完成。
+  private scheduleManualSave(): void {
+    if (!this.enabled || !this.engine || this.blocked()) return;
+    this.manualSaveDue = Date.now() + MANUAL_SAVE_DEBOUNCE_MS;
+    this.trigger("onManualSave", { source: "save-command" });
+  }
+  private canSync(event: SyncEvent, details?: SyncDetails): boolean {
+    return !this.blocked() || event === "onRetry"
+      || (event === "onResolve" && !!details?.strategy && this.failure?.code === "conflict");
+  }
+  private queueSync(event: SyncEvent, details?: SyncDetails): void {
+    // 重试和选边保留原意；其余忙时事件合并为一次完整同步。
+    if (event === "onRetry" || event === "onResolve") this.pending = { event, details };
+    else if (this.pending?.event !== "onRetry" && this.pending?.event !== "onResolve") {
+      this.pending = this.manualSaveDue
+        ? { event: "onManualSave", details: { source: "save-command" } }
+        : { event: "onCron" };
+    }
+    this.log("Sync queued", { event });
+    this.schedulePending();
+  }
+  // 一个计时器同时负责成功展示结束、前防抖和后防抖。
+  private schedulePending(): void {
+    window.clearTimeout(this.syncTimer); this.syncTimer = undefined;
+    if (!this.enabled || this.task) return;
+    const now = Date.now();
+    if (this.state === "success" && now >= this.cooldownUntil) { this.state = "idle"; this.render(); }
+    if (this.pending && !this.canSync(this.pending.event, this.pending.details)) {
+      this.pending = undefined; this.manualSaveDue = 0;
+    }
+    const due = Math.max(this.manualSaveDue, this.cooldownUntil);
+    if (this.pending && now >= due) {
+      const pending = this.pending;
+      this.pending = undefined; this.manualSaveDue = 0;
+      this.trigger(pending.event, pending.details);
+      return;
+    }
+    let next = this.pending ? due : Infinity;
+    if (this.state === "success") next = Math.min(next, this.cooldownUntil);
+    if (Number.isFinite(next)) {
+      this.syncTimer = window.setTimeout(() => { this.syncTimer = undefined; this.schedulePending(); }, Math.max(0, next - now));
+    }
   }
   private spin(): void {
     this.animation?.cancel();
     this.animation = this.button?.querySelector("svg")?.animate([{ transform: "rotate(0deg)" }, { transform: "rotate(360deg)" }], { duration: 1000, iterations: Infinity, easing: "linear" });
-  }
-  // Ctrl/Cmd+S 的安慰剂：只转圈并显示成功，不执行 Git；仅在待机时响应，不掩盖 ! 和 ×
-  private placebo(): void {
-    if (!this.enabled || this.task || this.state !== "idle") {
-      this.log("Placebo skipped", { enabled: this.enabled, busy: !!this.task, state: this.state });
-      return;
-    }
-    this.log("Placebo save feedback");
-    this.state = "syncing"; this.render(); this.spin();
-    this.placeboTimer = window.setTimeout(() => {
-      this.animation?.cancel(); this.animation = undefined;
-      this.state = "success"; this.render();
-      this.placeboTimer = window.setTimeout(() => { this.placeboTimer = undefined; this.state = "idle"; this.render(); }, this.config.successDisplayMs);
-    }, PLACEBO_SPIN_MS);
   }
   // 方案 A（default）：Obsidian 快捷键系统在 window 捕获阶段处理 Mod+S 并 stopPropagation，事件到不了 document；
   // 同一 window 上的其他监听器不受影响。只观察不拦截；弹出窗口有各自的 window，打开时同样注册
@@ -115,18 +139,18 @@ export default class OhMyGitPlugin extends Plugin {
     const onKey = (event: KeyboardEvent): void => {
       if (!(event.ctrlKey || event.metaKey) || (event.code !== "KeyS" && event.key?.toLowerCase() !== "s")) return;
       this.log("Save shortcut detected", { key: event.key, code: event.code, repeat: event.repeat, state: this.state, busy: !!this.task });
-      if (!event.repeat) this.placebo();
+      if (!event.repeat) this.scheduleManualSave();
     };
     this.registerDomEvent(window, "keydown", onKey, { capture: true });
     this.registerEvent(this.app.workspace.on("window-open", (_, win) => this.registerDomEvent(win, "keydown", onKey, { capture: true })));
-    this.log("Placebo listening to save shortcut", { mode: "default" });
+    this.log("Listening to save shortcut", { mode: "default" });
   }
   // 方案 B（hidden）：包装内部命令 editor:save-file（未公开 API），覆盖快捷键、命令面板和自定义快捷键。
-  // 先执行原逻辑再显示安慰剂；卸载时若包装仍在最外层才恢复，避免覆盖其他插件的包装
+  // 先执行原逻辑，完成后登记同步请求；卸载时若包装仍在最外层才恢复，避免覆盖其他插件的包装
   private hookSaveCommand(): void {
     const registry = (this.app as unknown as { commands?: { commands?: Record<string, SaveCommand> } }).commands?.commands;
     const command = registry?.["editor:save-file"];
-    if (!command) { this.log("Save command not found; placebo disabled", { mode: "hidden" }); return; }
+    if (!command) { this.log("Save command not found; manual sync shortcut disabled", { mode: "hidden" }); return; }
     const hooked: string[] = [];
     for (const key of SAVE_CALLBACKS) {
       const original = command[key];
@@ -135,9 +159,15 @@ export default class OhMyGitPlugin extends Plugin {
       const checking = key === "checkCallback" || key === "editorCheckCallback";
       const wrapped = (...args: unknown[]): unknown => {
         const result = original.apply(command, args);
-        if (!(checking && args[0] === true)) {
-          this.log("Save command executed", { via: key, state: this.state, busy: !!this.task });
-          this.placebo();
+        if (!(checking && (args[0] === true || result === false))) {
+          const saved = (): void => {
+            this.log("Save command executed", { via: key, state: this.state, busy: !!this.task });
+            this.scheduleManualSave();
+          };
+          // 保留原返回值；异步保存失败不触发同步。
+          if (result && typeof (result as PromiseLike<unknown>).then === "function") {
+            void Promise.resolve(result).then(saved, error => this.log("Save command failed", String(error)));
+          } else saved();
         }
         return result;
       };
@@ -145,19 +175,20 @@ export default class OhMyGitPlugin extends Plugin {
       this.register(() => { if (command[key] === wrapped) command[key] = original; });
       hooked.push(key);
     }
-    this.log("Placebo hooked save command", { mode: "hidden", callbacks: hooked });
+    this.log("Hooked save command", { mode: "hidden", callbacks: hooked });
   }
   private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
-    if (this.task) { this.pending = true; this.log("Sync queued (busy)", { event }); return; }
-    if (this.blocked() && event !== "onRetry" && !(event === "onResolve" && details?.strategy && this.failure?.code === "conflict")) {
+    if (!this.enabled || !this.button || !this.engine) return;
+    if (!this.canSync(event, details)) {
       this.log("Sync dropped (error state)", { event }); return;
     }
-    if (!this.enabled || !this.button || !this.engine) return;
+    if (this.task || this.pending || this.manualSaveDue || Date.now() < this.cooldownUntil) {
+      this.queueSync(event, details); return;
+    }
     const task = new AbortController(); this.task = task;
+    window.clearTimeout(this.syncTimer); this.syncTimer = undefined;
     // 本次同步提交整个仓库，已包含待同步的保存
     window.clearTimeout(this.saveTimer); this.saveTimer = undefined;
-    // 真实同步接管状态栏
-    window.clearTimeout(this.placeboTimer); this.placeboTimer = undefined;
     this.menu?.hide(); this.state = "syncing"; this.failure = undefined;
     const button = this.button;
     this.render(); this.spin();
@@ -173,8 +204,7 @@ export default class OhMyGitPlugin extends Plugin {
         return;
       }
       this.state = "success"; this.render();
-      this.log("Sync succeeded", { event }); await this.sleep(task.signal);
-      this.state = "idle";
+      this.log("Sync succeeded", { event });
     } catch (error) {
       if (task.signal.aborted) { this.state = "idle"; this.log("Sync cancelled", { event }); }
       else {
@@ -186,10 +216,9 @@ export default class OhMyGitPlugin extends Plugin {
     } finally {
       this.animation?.cancel(); this.animation = undefined;
       if (this.task === task) this.task = undefined;
+      this.cooldownUntil = Date.now() + this.config.successDisplayMs;
       if (this.enabled && this.button === button) this.render();
-      // 合并忙时的所有请求；完整同步也覆盖待处理的拉取事件
-      const pending = this.pending; this.pending = false;
-      if (pending && this.enabled && !this.blocked()) this.trigger("onCron");
+      this.schedulePending();
     }
   }
   // 核心插件「日记」的目录；读不到或位于 Vault 根目录时返回 ""，引擎不做 onLoad 旧空日记清理
@@ -228,7 +257,7 @@ export default class OhMyGitPlugin extends Plugin {
     this.registerInterval(window.setInterval(() => this.trigger("onCron"), this.config.syncIntervalSeconds * 1000));
     this.registerEvent(this.app.workspace.on("file-open", file => this.trigger("onOpen", { path: file?.path ?? null, source: "workspace:file-open" })));
     this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.scheduleSave(file.path); }));
-    // 改名立即单独提交，不走防抖：避免与后续编辑合并，保证 git log --follow 可追溯
+    // 改名绕过自动保存防抖；忙时或前后防抖窗口内仍合并排队
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.trigger("onRename", { path: file.path, source: `vault:rename from ${oldPath}` })));
     this.app.workspace.onLayoutReady(() => {
       if (!this.enabled) return;
@@ -244,7 +273,7 @@ export default class OhMyGitPlugin extends Plugin {
     this.trigger("onLoad");
   }
   onunload(): void {
-    this.log("onUnload"); this.enabled = false; this.pending = false; window.clearTimeout(this.saveTimer); window.clearTimeout(this.placeboTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
+    this.log("onUnload"); this.enabled = false; this.pending = undefined; this.manualSaveDue = 0; window.clearTimeout(this.saveTimer); window.clearTimeout(this.syncTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
     this.openFiles.clear(); this.button = undefined;
   }
 }

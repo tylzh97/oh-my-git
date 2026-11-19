@@ -10,12 +10,12 @@
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
 | syncIntervalSeconds | 300 | 定时同步间隔，秒 |
-| saveDebounceSeconds | 30 | 最后一次保存后静默多少秒才触发 onSave |
+| saveDebounceSeconds | 30 | 最后一次文件修改后静默多少秒才触发自动 onSave |
 | gitTimeoutSeconds | 120 | 单条 Git 命令超时，秒 |
 | maxFileMiB | 30 | 插件提交的单文件上限，MiB |
-| successDisplayMs | 1000 | 成功 √ 的显示时长，毫秒 |
+| successDisplayMs | 1000 | 同步结束后的防抖时长，同时为成功 √ 的显示时长，毫秒 |
 | escalateAfterFailures | 5 | 非阻塞失败连续达到此次数后显示 ×（仍不暂停同步） |
-| placeboMode | "hidden" | Ctrl/Cmd+S 安慰剂的挂载方式：`default` 或 `hidden`，见「事件」 |
+| placeboMode | "hidden" | Ctrl/Cmd+S 真实同步的挂载方式（保留原配置名）：`default` 或 `hidden`，见「事件」 |
 | monthlyBackupEnabled | true | 是否创建月度备份分支 |
 | lfsExtensions | 见配置文件 | LFS 扩展名，不含点，大小写不敏感 |
 
@@ -31,6 +31,7 @@ src/
   jsonc.d.ts    # 让 tsc 识别 .jsonc 文本导入
 tests/
   ui.cjs        # 状态、交互和重试
+  manual-save.cjs # 虚拟时钟验证手动保存的前后防抖和命令包装
   sync.cjs      # 临时仓库中的同步与数据保护
   config.cjs    # 配置及 Git 错误信息
   setup.cjs     # setup-git.cmd 的 sh 部分
@@ -89,19 +90,24 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 事件
 
-- onLoad / onRetry / onResolve / onCron：提交本地变化 → fetch upstream → 落后则快进，分叉则保护双方并在临时 worktree 中整合 → 应用到 Vault → push → 月度备份。
+- onLoad / onRetry / onResolve / onCron / onManualSave：提交本地变化 → fetch upstream → 落后则快进，分叉则保护双方并在临时 worktree 中整合 → 应用到 Vault → push → 月度备份。
 - onOpen / onSave / onClose / onRename / onClick：提交整个仓库 → push → 月度备份，不主动拉取。push 被拒且远程已前进时，按上面的方式整合后重推一次。
 - 没有新提交（本地与 upstream 相同）时不 push。
 - onSave 带防抖：每次文件修改都把计时器重置为 saveDebounceSeconds，静默期满才同步一次。连续编辑期间由 onCron 兜底。其他事件开始同步时会取消计时器，因为这次同步已包含这些修改。
-- onRename：Obsidian 中重命名文件或文件夹后立即同步，不走防抖。空闲时触发且快照前未继续编辑的情况下，改名会单独形成一个提交（相似度 100%），用 `git log --follow -- <新路径>` 可以追溯到改名前的历史。Git 本身不记录重命名，`git mv` 与 `add -A` 的结果相同，所以插件不使用 `git mv`。
+- onRename：Obsidian 中重命名文件或文件夹后请求同步，不走自动保存的 30 秒防抖。空闲且不在前后防抖窗口时立即执行，快照前未继续编辑的情况下，改名会单独形成一个提交（相似度 100%），用 `git log --follow -- <新路径>` 可以追溯到改名前的历史。Git 本身不记录重命名，`git mv` 与 `add -A` 的结果相同，所以插件不使用 `git mv`。
 - 「重试」统一按 onLoad 模式完整执行一次。
-- Ctrl/Cmd+S 是安慰剂：只在待机时让图标转一下再显示 √，不执行任何 Git 操作，也不拦截 Obsidian 自己的保存。黄色 ! 和红色 × 状态下不响应，以免掩盖故障。真实同步开始时会立即接管状态栏。挂载方式由 placeboMode 决定：
-  - `hidden`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原来的保存逻辑，再显示安慰剂。能覆盖快捷键、命令面板，以及用户自定义的保存快捷键。这是**未公开 API**，Obsidian 升级后可能失效；找不到该命令时只记一条日志，安慰剂不生效。插件卸载时恢复原回调。
-  - `default`：在 `window` 的捕获阶段监听 Ctrl/Cmd+S（同时识别物理键位 KeyS，兼容输入法），弹出窗口打开时也会注册。只用公开 API，但只覆盖键盘快捷键。Obsidian 的快捷键系统会在 `window` 捕获阶段对保存调用 `stopPropagation`，所以不能监听 `document`。
-  - 排查时，在 Console 中过滤 `Oh My Git`，查看 `Placebo hooked save command`、`Save command executed`、`Save shortcut detected`、`Placebo skipped` 这几条日志。
+- Ctrl/Cmd+S 保留 Obsidian 原来的保存，同时请求真实的完整双向同步（onManualSave），即使没有本地修改也会 fetch：
+  - **前防抖固定 500ms**：最后一次保存请求后静默 500ms 才执行，连续按会重置计时。不提前转圈或显示 √。
+  - **后防抖为 successDisplayMs**（默认 1000ms）：从 Git 同步结束时开始，成功时在此期间显示 √。Git 任务锁已释放，但窗口内的新请求只排队，不提前开始下一次同步。
+  - 有待处理请求时，下次开始时间为 `max(最后一次手动保存请求时间 + 500ms, 上次同步结束时间 + successDisplayMs)`。没有新请求则回到待机，不额外同步。
+  - 同步期间及成功展示期间的新保存合并保留一次，覆盖期间的新修改。普通失败也经过后防抖；阻塞失败仍须处理后显式重试。手动同步开始时取消已有的自动保存计时器。
+  - 挂载方式由 placeboMode 决定，配置名保留，已不再模拟成功：
+    - `hidden`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原保存；若返回 Promise，等待成功后再启动前防抖，原返回值保持不变。覆盖快捷键、命令面板和自定义保存快捷键。这是**未公开 API**；找不到命令时只记日志，手动同步快捷键不生效。卸载时恢复原回调。
+    - `default`：在 `window` 捕获阶段观察 Ctrl/Cmd+S，不拦截原保存，500ms 前防抖后请求同步。兼容输入法物理键位 KeyS 和弹出窗口，仅覆盖键盘快捷键；不能等待原保存命令的异步返回值。
+  - 排查时，在 Console 中过滤 `Oh My Git`，查看 `Hooked save command`、`Save command executed`、`Save shortcut detected`、`Sync queued` 和真实同步结果日志。
 - onUnload：请求取消，当前 Git 命令执行完后不再启动后续步骤。
 
-同步进行中（包括显示成功 √ 期间）新触发的事件合并为一次待处理请求；结束后补跑一次完整同步（含 fetch）。阻塞失败或插件卸载时不补跑。忙时的重命名可能和后续编辑进入同一个快照，不保证独立提交。
+同步进行中及前后防抖窗口内，新事件合并为一次待处理的完整同步（含 fetch），满足防抖条件后补跑。重试和冲突选边保留对应事件及策略。阻塞失败不会自动补跑普通事件；插件卸载会取消全部计时器和待处理请求。忙时或防抖窗口内的重命名可能和后续编辑进入同一个快照，不保证独立提交。
 
 | 状态 | 行为 |
 | --- | --- |

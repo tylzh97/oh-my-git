@@ -77,6 +77,15 @@ async function basics() {
  assert.equal(refs(f),remoteRefs);assert.equal(git(f.local,'for-each-ref','--format=%(refname)','refs/heads/ogit/recovery'),localRefs);
  console.log('PASS idle onCron pulls, fast-forward creates no recovery refs');
 
+ // 手动保存即使没有本地变化，也必须 fetch 并应用远程新提交
+ await remoteCommit(f,'manual-pull.md','manual remote\n');await run(f,'onManualSave');
+ assert.equal(await read(f.local,'manual-pull.md'),'manual remote\n');
+ await remoteCommit(f,'manual-peer.md','peer\n');await write(f.local,'manual-local.md','local\n');
+ await run(f,'onManualSave');assert.equal(git(f.remote,'show','main:manual-local.md'),'local');
+ assert.equal(await read(f.local,'manual-peer.md'),'peer\n');assertMerged(f);
+ assert.equal(metadata(f.remote,'main').event,'onManualSave');
+ console.log('PASS manual save fetches with no local changes and merges/pushes concurrent changes');
+
  // 无新提交时不访问远程：远程拒绝一切推送也能成功
  await hook(f.remote,'pre-receive','#!/bin/sh\nexit 1\n');await run(f,'onSave');await fs.rm(path.join(f.remote,'hooks','pre-receive'));
  console.log('PASS no push without new commits');
