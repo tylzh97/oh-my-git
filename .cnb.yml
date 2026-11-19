@@ -53,3 +53,28 @@ main:
           settings:
             tag: nightly
             attachments: *assets
+
+# 只有数字开头的 Tag 才发布正式 Release；nightly 这个 Tag 不会匹配到这里
+"[0-9]*":
+  tag_push:
+    - name: release
+      docker:
+        image: node:22
+      stages:
+        # Tag 必须与 manifest.json、package.json 的版本一致，versions.json 里要有这一条
+        - name: check version
+          script:
+            - test "$(node -p 'require("./manifest.json").version')" = "$CNB_BRANCH"
+            - test "$(node -p 'require("./package.json").version')" = "$CNB_BRANCH"
+            - test "$(node -p 'const m = require("./manifest.json"); require("./versions.json")[m.version] === m.minAppVersion')" = true
+        - *build
+        # 说明取 Tag 的附注信息（git tag -a）
+        - name: release
+          type: git:release
+          options:
+            description: $CNB_TAG_MESSAGE
+            latest: true
+        - name: upload assets
+          image: cnbcool/attachments:latest
+          settings:
+            attachments: *assets
