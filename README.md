@@ -135,11 +135,8 @@ Obsidian 启动时会自动创建当天的空日记。如果另一台设备已�
 | 范围 | 时机 | 条件 | 动作 |
 | --- | --- | --- | --- |
 | 全 Vault | 每次快照 | — | 不 add，文件留在磁盘 |
-| 日记目录 | 仅 onLoad，快照前 | 创建日期不是今天，且已创建超过 2 小时 | 删除 |
 | 全 Vault | 整合时，应用结果前 | 合并结果里有同名文件，且删除前复查仍为 0 字节 | 删除（0 字节，无损） |
 
-- 日记目录取自核心插件「日记」的配置 `<configDir>/daily-notes.json` 中的 `folder`（含子目录），启动时读取一次。文件不存在、无法解析或 `folder` 为空（日记放在 Vault 根目录）时，不做 onLoad 清理；撞名删除不依赖日记目录。
-- 创建时间：Windows/macOS 用 birthtime，其他平台或 birthtime 无效时用 mtime。"今天"按本机时区的自然日。
 - 已跟踪文件、非 `.md` 文件不受影响：清空一篇已跟踪的笔记照常提交。
 - 不在状态栏提示。跳过和删除的路径记在 history-YYYY-MM.jsonl 的 `emptySkipped`、`emptiesRemoved` 字段；`emptySkipped` 只在列表与上次不同时记录。
 

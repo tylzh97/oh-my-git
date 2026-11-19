@@ -12,10 +12,10 @@ async function read(cwd,file) { return fs.readFile(path.join(cwd,file),'utf8'); 
 async function commit(cwd,file,text) { await write(cwd,file,text);git(cwd,'add','--',file);git(cwd,'commit','-m',`test: ${file}`); }
 async function hook(cwd,name,text) { await write(cwd,`hooks/${name}`,text);await fs.chmod(path.join(cwd,'hooks',name),0o755); }
 function setup(cwd) { git(cwd,'config','user.name','OGit Integration');git(cwd,'config','user.email','ogit-test@example.invalid');git(cwd,'config','commit.gpgsign','false');git(cwd,'config','core.autocrlf','false');git(cwd,'config','core.hooksPath','.git/hooks');git(cwd,'lfs','install','--local'); }
-async function fixture(name,config=DEFAULT_CONFIG,log=()=>{},diaryDir='') {
+async function fixture(name,config=DEFAULT_CONFIG,log=()=>{}) {
  const base=path.join(root,name),remote=path.join(base,'remote.git'),seed=path.join(base,'seed'),local=path.join(base,'local'),peer=path.join(base,'peer');
  await fs.mkdir(base,{recursive:true});git(base,'init','--bare','--initial-branch=main',remote);git(base,'init','--initial-branch=main',seed);setup(seed);await commit(seed,'note.md','base\n');git(seed,'remote','add','origin',remote);git(seed,'push','-u','origin','main');git(base,'clone',remote,local);git(base,'clone',remote,peer);setup(local);setup(peer);
- const logs=[];const engine=new Engine(local,(...x)=>{logs.push(x);log(...x)},path.join(base,'state'),config,diaryDir);
+ const logs=[];const engine=new Engine(local,(...x)=>{logs.push(x);log(...x)},path.join(base,'state'),config);
  return {base,remote,local,peer,engine,logs};
 }
 async function run(f,event='onLoad',strategy) { return f.engine.run(event,strategy?{strategy}:undefined,new AbortController().signal); }
@@ -283,7 +283,7 @@ async function monthly() {
 }
 
 async function diaries() {
- const f=await fixture('empty-diary',DEFAULT_CONFIG,()=>{},'Daily');await run(f);
+ const f=await fixture('empty-diary');await run(f);
  const exists=file=>fs.stat(path.join(f.local,file)).then(()=>true,()=>false);
  // R1：全 Vault 未跟踪的空 .md 不入库；非 .md 空文件、被清空的已跟踪文件照常提交
  await write(f.local,'Daily/2026/old.md','');await write(f.local,'other/empty.md','');await write(f.local,'other/UPPER.MD','');await write(f.local,'keep.gitkeep','');await write(f.local,'note.md','');
@@ -293,24 +293,15 @@ async function diaries() {
  assert.deepEqual((await history(f)).at(-1).emptySkipped.sort(),['Daily/2026/old.md','other/UPPER.MD','other/empty.md']);
  // 列表不变时不重复记录
  await run(f,'onSave');assert.equal((await history(f)).at(-1).emptySkipped,undefined);
- // R2：仅 onLoad，仅日记目录。CI 走 mtime 分支；Windows/macOS 用 birthtime，无法伪造，只在 Linux 断言删除
- const old=new Date(Date.now()-3*24*3600*1000);
- for(const file of ['Daily/2026/old.md','other/empty.md'])await fs.utimes(path.join(f.local,file),old,old);
+ // 旧的空 md 不会被清理：onLoad 也只是不入库
+ const old=new Date(Date.now()-3*24*3600*1000);await fs.utimes(path.join(f.local,'Daily/2026/old.md'),old,old);
  await write(f.local,'Daily/today.md','');
- await run(f,'onSave');assert.ok(await exists('Daily/2026/old.md'));
- await run(f,'onLoad');assert.ok(await exists('other/empty.md'));assert.ok(await exists('Daily/today.md'));
- if(process.platform==='linux'){assert.ok(!await exists('Daily/2026/old.md'));assert.deepEqual((await history(f)).at(-1).emptiesRemoved,['Daily/2026/old.md']);}
- // R3：远程已有同名日记时，本地今天的空日记在应用前删除，远程内容写入
+ await run(f,'onLoad');for(const file of ['Daily/2026/old.md','other/empty.md','Daily/today.md'])assert.ok(await exists(file));
+ // R2：远程已有同名文件时，本地的空 md 在应用前删除，远程内容写入；不撞名的保留
  await remoteCommit(f,'Daily/today.md','written on peer\n');
  await run(f,'onLoad');assert.equal(await read(f.local,'Daily/today.md'),'written on peer\n');
- assert.deepEqual((await history(f)).at(-1).emptiesRemoved,['Daily/today.md']);
- // 没有日记目录：不清理旧空日记；但撞名的空 md（含根目录）照样让位给远程
- const n=await fixture('no-diary-dir');await run(n);
- await write(n.local,'Daily/stale.md','');await fs.utimes(path.join(n.local,'Daily/stale.md'),old,old);
- await remoteCommit(n,'today.md','peer\n');await write(n.local,'today.md','');
- await run(n);assert.equal(await read(n.local,'today.md'),'peer\n');assert.equal(await read(n.local,'Daily/stale.md'),'');
- assert.deepEqual((await history(n)).at(-1).emptiesRemoved,['today.md']);
- console.log('PASS empty .md never committed, stale empty diaries removed on load, colliding empty diaries yield to remote, colliding empty .md yield to remote even without diary folder');
+ assert.deepEqual((await history(f)).at(-1).emptiesRemoved,['Daily/today.md']);assert.ok(await exists('Daily/2026/old.md'));
+ console.log('PASS empty .md never committed or cleaned up; colliding empty .md yield to remote');
 }
 
 async function main() {
