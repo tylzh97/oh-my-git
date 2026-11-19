@@ -194,13 +194,21 @@ export class GitSyncEngine {
     const incoming = new Set((await this.git(["ls-tree", "-r", "--name-only", "-z", result])).split("\0"));
     await this.removeEmpties(empty.filter(name => incoming.has(name)));
   }
-  // 只约束本次快照新引入的内容：新增或修改的超限文件取消暂存，不入库；已在历史中的文件不受影响
+  // 在 add / LFS clean 前筛掉超限文件；已有历史中未修改的大文件不受影响
   private async skipOversized(): Promise<OversizedFile[]> {
     const limit = this.config.maxFileMiB * 1024 * 1024;
-    const changed = (await this.git(["diff", "--cached", "--no-renames", "--name-only", "-z", "--diff-filter=ACMT"])).split("\0").filter(Boolean);
+    const changed = new Set([
+      ...((await this.git(["diff", "HEAD", "--no-renames", "--name-only", "-z"])).split("\0")),
+      ...((await this.git(["ls-files", "--others", "--exclude-standard", "-z"])).split("\0")),
+    ].filter(Boolean));
     const oversized: OversizedFile[] = [];
     for (const name of changed) {
-      const bytes = (await fs.stat(path.join(this.root, name))).size;
+      const stat = await fs.stat(path.join(this.root, name)).catch(error => {
+        if (error.code === "ENOENT") return null; // 删除的文件照常暂存
+        throw error;
+      });
+      if (!stat?.isFile()) continue;
+      const bytes = stat.size;
       if (bytes > limit) oversized.push({ path: name, bytes });
     }
     await this.unstage(oversized.map(file => file.path));
@@ -216,11 +224,13 @@ export class GitSyncEngine {
     await fs.writeFile(file, updated);
     return true;
   }
-  private async stageAll(cwd: string): Promise<void> {
+  private async stageAll(cwd: string, excluded: string[] = []): Promise<void> {
     const changed = await this.ensureAttributes(cwd);
-    await this.git(["add", "-A"], cwd);
+    // literal 防止文件名中的通配符被解释；排除规则也用于 renormalize
+    const paths = [".", ...excluded.map(name => `:(top,exclude,literal)${name}`)].join("\0");
+    await this.git(["add", "-A", "--pathspec-from-file=-", "--pathspec-file-nul"], cwd, paths);
     // renormalize 会重读全部已跟踪文件，只在 LFS 规则变化时执行
-    if (changed) await this.git(["add", "--renormalize", "."], cwd);
+    if (changed) await this.git(["add", "--renormalize", "--pathspec-from-file=-", "--pathspec-file-nul"], cwd, paths);
   }
 
   private async snapshot(): Promise<{ head: string; skipped: OversizedFile[] }> {
@@ -232,11 +242,11 @@ export class GitSyncEngine {
       throw error;
     }
     const empty = await this.emptyMds();
-    await this.stageAll(this.root);
+    const skipped = await this.skipOversized();
     await this.unstage(empty);
+    await this.stageAll(this.root, [...empty, ...skipped.map(file => file.path)]);
     const key = empty.join("\0");
     if (key !== this.lastEmpty) { this.journal.emptySkipped = empty; this.lastEmpty = key; }
-    const skipped = await this.skipOversized();
     if (await this.git(["diff", "--cached", "--name-only"])) {
       const stats = await this.git(["diff", "--cached", "--shortstat"]);
       await this.commit(`ogit: snapshot local changes (${this.journal.event})`, this.metadata("snapshot", { stats }));

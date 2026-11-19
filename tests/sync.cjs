@@ -205,6 +205,19 @@ async function ignoredCollisions() {
 async function sizes() {
  const config={...DEFAULT_CONFIG,maxFileMiB:1},limit=1024*1024;
  const f=await fixture('size',config);await run(f);
+ // 超限内容不能先写入 Git 或 LFS 对象库；预先暂存的内容也必须取消暂存
+ for (const name of ['never-added[1].bin','never-added[1].png']) {
+  const content=Buffer.alloc(limit+7,71);await write(f.local,name,content);
+  const oid=git(f.local,'hash-object','--no-filters','--',name);
+  const lfsOid=require('node:crypto').createHash('sha256').update(content).digest('hex');
+  const result=await run(f,'onSave');assert.equal(result.skipped[0].path,name);
+  assert.throws(()=>git(f.local,'cat-file','-e',oid));
+  assert.equal(await fs.stat(path.join(f.local,'.git/lfs/objects',lfsOid.slice(0,2),lfsOid.slice(2,4),lfsOid)).then(()=>true,()=>false),false);
+  await fs.rm(path.join(f.local,name));
+ }
+ await write(f.local,'staged.bin',Buffer.alloc(limit+8,72));git(f.local,'add','staged.bin');
+ assert.equal((await run(f,'onSave')).skipped[0].path,'staged.bin');assert.equal(git(f.local,'diff','--cached','--name-only'),'');
+ await fs.rm(path.join(f.local,'staged.bin'));
  for(const name of ['中文 空格.md','big.bin','big.png']){
    await write(f.local,name,Buffer.alloc(limit,65));assert.deepEqual((await run(f,'onSave')).skipped,[]);
    // 修改为超限：该文件跳过，其余内容照常提交推送
