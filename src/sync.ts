@@ -243,7 +243,6 @@ export class GitSyncEngine {
     }
     const empty = await this.emptyMds();
     const skipped = await this.skipOversized();
-    await this.unstage(empty);
     await this.stageAll(this.root, [...empty, ...skipped.map(file => file.path)]);
     const key = empty.join("\0");
     if (key !== this.lastEmpty) { this.journal.emptySkipped = empty; this.lastEmpty = key; }
