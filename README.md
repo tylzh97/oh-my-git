@@ -188,7 +188,7 @@ node scripts/prune-recovery.cjs [Vault路径] [天数=90] [--delete]
 
 ## 提交元数据（schemaVersion 3）
 
-提交标题固定为英文，正文中用 Ogit-Metadata-Begin / Ogit-Metadata-End 包围一段 JSON：operationId、event、action、device、time、branch、upstream；整合提交还包含 localCommit、remoteCommit、两个恢复分支名，选边提交另有 strategy、reason。
+提交标题固定为英文，正文中用 Ogit-Metadata-Begin / Ogit-Metadata-End 包围一段 JSON：operationId、event、action、device、time、branch、upstream；整合提交还包含 localCommit、remoteCommit、两个恢复分支名，选边提交另有 strategy。
 
 只读解析：在插件目录执行 `node scripts/read-record.cjs <提交ID> [Vault路径]`。
 查看已推送的快照：`git show <恢复分支>:<文件路径>`。LFS 文件显示的是指针，恢复二进制需要在独立 worktree 中执行 lfs pull。

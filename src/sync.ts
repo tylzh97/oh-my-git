@@ -9,7 +9,7 @@ import * as os from "node:os";
 
 export type SyncEvent = "onClick" | "onLoad" | "onSave" | "onManualSave" | "onRename" | "onCron" | "onResolve" | "onRetry";
 export type Strategy = "local" | "remote";
-export interface SyncDetails { path?: string | null; source?: string; strategy?: Strategy; reason?: string }
+export interface SyncDetails { path?: string | null; source?: string; strategy?: Strategy }
 export interface SyncResult { skipped: OversizedFile[] }
 interface Context { branch: string; remote: string; remoteRef: string; upstream: string }
 interface RecoveryRefs { localRecoveryRef: string; remoteRecoveryRef: string }
@@ -317,13 +317,13 @@ export class GitSyncEngine {
     await this.gitAlways(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
     await this.phase("applied");
   }
-  private async integrate(local: string, remote: string, label: string, strategy?: Strategy, reason?: string): Promise<string> {
+  private async integrate(local: string, remote: string, label: string, strategy?: Strategy): Promise<string> {
     const refs = await this.protect(label, local, remote);
     const temp = path.join(this.stateDir, `${TEMP_PREFIX}worktree-${randomBytes(6).toString("hex")}`);
     await this.phase("merge", { temporaryWorktree: temp });
     await this.net(["worktree", "add", "--detach", temp, strategy ? remote : local]);
     try {
-      const result = strategy ? await this.choose(temp, local, remote, strategy, reason, refs) : await this.merge(temp, local, remote, refs);
+      const result = strategy ? await this.choose(temp, local, remote, strategy, refs) : await this.merge(temp, local, remote, refs);
       // 结果也保留独立分支，应用或推送失败时仍可找回
       await this.git(["update-ref", refs.localRecoveryRef.replace(/local$/, "result"), result, ZERO]);
       await this.apply(local, result);
@@ -345,7 +345,7 @@ export class GitSyncEngine {
       this.metadata("merge", { localCommit: local, remoteCommit: remote, ...refs }), temp);
   }
   // 整仓库选一侧；以 upstream 为第一父提交，未包含本地历史时以本地为第二父提交
-  private async choose(temp: string, local: string, remote: string, strategy: Strategy, reason: string | undefined, refs: RecoveryRefs): Promise<string> {
+  private async choose(temp: string, local: string, remote: string, strategy: Strategy, refs: RecoveryRefs): Promise<string> {
     if (strategy === "local") await this.net(["read-tree", "--reset", "-u", local], temp);
     await this.stageAll(temp);
     if (!(await this.isAncestor(local, remote))) {
@@ -353,7 +353,7 @@ export class GitSyncEngine {
       await fs.writeFile(path.resolve(temp, await this.git(["rev-parse", "--git-path", "MERGE_HEAD"], temp)), `${local}\n`);
     }
     return this.commit(`ogit: resolve repository using ${strategy}`, this.metadata("resolve", {
-      strategy, reason: reason || "history-divergence", localCommit: local, remoteCommit: remote, ...refs,
+      strategy, localCommit: local, remoteCommit: remote, ...refs,
     }), temp);
   }
 
@@ -438,7 +438,7 @@ export class GitSyncEngine {
         const remote = await this.fetch();
         await this.phase("fetched", { remoteCommit: remote });
         local = event === "onResolve" && details?.strategy
-          ? await this.integrate(local, remote, `keep-${details.strategy}`, details.strategy, details.reason)
+          ? await this.integrate(local, remote, `keep-${details.strategy}`, details.strategy)
           : await this.reconcile(local, remote, "merge");
       }
       local = await this.push(local);

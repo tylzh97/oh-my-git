@@ -115,11 +115,11 @@ function hook(p, command) {
 
   // 选边在后防抖期间排队时保留策略，其他保存请求不能覆盖。
   const resolve = plugin(); resolve.engine.run = async () => { throw new SyncError('conflict'); };
-  await resolve.sync('onLoad'); await resolve.sync('onResolve', { strategy: 'remote', reason: 'conflict' });
+  await resolve.sync('onLoad'); await resolve.sync('onResolve', { strategy: 'remote' });
   resolve.scheduleManualSave();
   let chosen;
   resolve.engine.run = async (event, details) => { chosen = { event, ...details }; return ok; };
-  await advance(1000); assert.deepEqual(chosen, { event: 'onResolve', strategy: 'remote', reason: 'conflict' }); resolve.onunload();
+  await advance(1000); assert.deepEqual(chosen, { event: 'onResolve', strategy: 'remote' }); resolve.onunload();
 
   // command 模式保留原返回值、this 和参数；等异步保存完成才开始前防抖。
   const asyncSave = plugin(); let saved;

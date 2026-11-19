@@ -62,7 +62,7 @@ export default class OhMyGitPlugin extends Plugin {
     }));
     const choose = (strategy: "local" | "remote"): void => {
       menu.hide();
-      if (this.enabled && this.state === "error" && this.failure?.code === "conflict") this.trigger("onResolve", { strategy, reason: this.failure.code });
+      if (this.enabled && this.state === "error" && this.failure?.code === "conflict") this.trigger("onResolve", { strategy });
     };
     if (this.failure?.code === "conflict") {
       menu.addItem(item => item.setTitle(t("keepRemote")).setIcon("cloud").onClick(() => choose("remote")));
