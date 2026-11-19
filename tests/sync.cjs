@@ -247,7 +247,22 @@ async function monthly() {
  assert.equal(git(f.remote,'for-each-ref','--format=%(objectname)','refs/heads/ogit/monthly'),created);
  const disabled=await fixture('monthly-disabled',{...DEFAULT_CONFIG,monthlyBackupEnabled:false});await run(disabled);
  assert.equal(refs(disabled,'refs/heads/ogit/monthly'),'');
- console.log('PASS optional monthly backup retries until created, never overwritten');
+ // 状态文件损坏只影响月度备份，不把已成功推送的主线标成失败
+ const damaged=await fixture('monthly-damaged');await run(damaged);
+ const statePath=path.join(await stateDir(damaged),'state.json');
+ const originalMonthly=refs(damaged,'refs/heads/ogit/monthly');
+ for (const invalid of ['{','null']) {
+  await fs.writeFile(statePath,invalid);await write(damaged.local,'note.md','updated '+invalid+'\n');
+  await run(damaged,'onSave');
+  assert.equal(git(damaged.remote,'rev-parse','main'),git(damaged.local,'rev-parse','HEAD'));
+  assert.equal((await history(damaged)).at(-1).outcome,'success');
+  assert.equal(await fs.readFile(statePath,'utf8'),invalid);
+ }
+ assert.equal(damaged.logs.filter(x=>x[0]==='Monthly backup deferred').length,2);
+ await fs.rm(statePath);await run(damaged,'onSave');
+ assert.ok(JSON.parse(await fs.readFile(statePath,'utf8')).monthly);
+ assert.equal(refs(damaged,'refs/heads/ogit/monthly'),originalMonthly);
+ console.log('PASS optional monthly backup retries until created, never overwritten; damaged state does not fail main sync');
 }
 
 async function diaries() {

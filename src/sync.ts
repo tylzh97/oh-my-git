@@ -389,9 +389,9 @@ export class GitSyncEngine {
     const key = `${c.branch.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 48)}-${createHash("sha256").update(c.branch).digest("hex").slice(0, 8)}`;
     const ref = `refs/heads/ogit/monthly/${month}/${key}`;
     const statePath = path.join(this.stateDir, "state.json");
-    const state = JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}"));
-    if (state.monthly === ref) return;
     try {
+      const state = JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}"));
+      if (state.monthly === ref) return;
       if (!(await this.git(["ls-remote", "--refs", c.remote, ref]))) {
         // 空 lease 表示只创建，不允许覆盖其他设备已创建的分支
         await this.pushRefs([`${commit}:${ref}`], [`--force-with-lease=${ref}:`]);
