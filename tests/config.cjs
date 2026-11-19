@@ -28,7 +28,7 @@ const { build } = require('esbuild');
   assert.throws(() => parseJsonc('{"a": 1 "b": 2}'), SyntaxError);
   const custom = parseConfig('{"syncIntervalSeconds":10,"maxFileMiB":1,"lfsExtensions":["BIN"]}');
   assert.equal(custom.syncIntervalSeconds, 10); assert.equal(custom.maxFileMiB, 1);
-  assert.equal(custom.gitTimeoutSeconds, DEFAULT_CONFIG.gitTimeoutSeconds); assert.deepEqual(custom.lfsExtensions, ['bin']);
+  assert.equal(custom.gitTimeoutSeconds, DEFAULT_CONFIG.gitTimeoutSeconds); assert.equal(custom.networkTimeoutSeconds, 1800); assert.deepEqual(custom.lfsExtensions, ['bin']);
 
   let readPath;
   const adapter = { async exists(file) { readPath = file; return false; }, async read() { throw new Error('must not read'); } };

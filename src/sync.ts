@@ -66,9 +66,13 @@ export class GitSyncEngine {
     this.lfsRules = ["# BEGIN OGIT LFS", ...rules, "# END OGIT LFS", ""].join("\n");
   }
 
-  private async git(args: string[], cwd = this.root, input?: string): Promise<string> {
+  private async git(args: string[], cwd = this.root, input?: string, timeoutSeconds = this.config.gitTimeoutSeconds): Promise<string> {
     if (this.signal?.aborted) throw new SyncError("failed", "Sync cancelled");
-    return runGit(args, cwd, this.config.gitTimeoutSeconds * 1000, input);
+    return runGit(args, cwd, timeoutSeconds * 1000, input);
+  }
+  // 可能传输数据的命令：访问远程，或检出时由 LFS smudge 下载对象。大仓库和慢网络下远超本地命令的耗时
+  private net(args: string[], cwd = this.root): Promise<string> {
+    return this.git(args, cwd, undefined, this.config.networkTimeoutSeconds);
   }
   // 一旦开始就必须做完的步骤：不检查取消信号，避免把 Vault 留在应用到一半的状态
   private gitAlways(args: string[], cwd = this.root): Promise<string> {
@@ -259,13 +263,13 @@ export class GitSyncEngine {
   private async fetch(): Promise<string> {
     const c = this.context;
     // 只拉取 upstream，不受用户 fetch refspec 影响
-    try { await this.git(["fetch", "--no-tags", c.remote, `+${c.remoteRef}:${c.upstream}`]); }
+    try { await this.net(["fetch", "--no-tags", c.remote, `+${c.remoteRef}:${c.upstream}`]); }
     catch (error) { throw error instanceof GitError ? new SyncError("remote", error.message) : error; }
     return this.git(["rev-parse", c.upstream]);
   }
   // porcelain 输出中以 ! 开头的行表示该引用被拒绝；没有这类行说明根本没能与远程完成通信（网络、认证等）
   private async pushRefs(refspecs: string[], options: string[] = []): Promise<void> {
-    try { await this.git(["push", "--porcelain", ...options, this.context.remote, ...refspecs]); }
+    try { await this.net(["push", "--porcelain", ...options, this.context.remote, ...refspecs]); }
     catch (error) {
       if (!(error instanceof GitError)) throw error;
       const rejected = error.stdout.split("\n").some(line => line.startsWith("!"));
@@ -313,7 +317,7 @@ export class GitSyncEngine {
     await this.checkIgnoredCollisions(local, result);
     await this.removeCollidingEmpties(result);
     // 两树 read-tree 拒绝覆盖未提交修改和未跟踪文件；不在 Vault 中 reset --hard
-    await this.git(["read-tree", "-m", "-u", local, result]);
+    await this.net(["read-tree", "-m", "-u", local, result]);
     await this.gitAlways(["update-ref", `refs/heads/${this.context.branch}`, result, local]);
     await this.phase("applied");
   }
@@ -321,7 +325,7 @@ export class GitSyncEngine {
     const refs = await this.protect(label, local, remote);
     const temp = path.join(this.stateDir, `${TEMP_PREFIX}worktree-${randomBytes(6).toString("hex")}`);
     await this.phase("merge", { temporaryWorktree: temp });
-    await this.git(["worktree", "add", "--detach", temp, strategy ? remote : local]);
+    await this.net(["worktree", "add", "--detach", temp, strategy ? remote : local]);
     try {
       const result = strategy ? await this.choose(temp, local, remote, strategy, reason, refs) : await this.merge(temp, local, remote, refs);
       // 结果也保留独立分支，应用或推送失败时仍可找回
@@ -335,7 +339,7 @@ export class GitSyncEngine {
   // 仅用于已分叉的历史；快进由 reconcile 处理
   private async merge(temp: string, local: string, remote: string, refs: RecoveryRefs): Promise<string> {
     if (!(await this.tryGit(["merge-base", local, remote], temp))) throw new SyncError("conflict", "Local and remote histories are unrelated");
-    try { await this.git(["merge", "--no-commit", "--no-ff", remote], temp); }
+    try { await this.net(["merge", "--no-commit", "--no-ff", remote], temp); }
     catch (error) {
       // 退出码 1 且存在未合并条目即为内容冲突
       if (error instanceof GitError && error.exitCode === 1 && await this.git(["ls-files", "-u"], temp)) throw new SyncError("conflict", error.message);
@@ -346,7 +350,7 @@ export class GitSyncEngine {
   }
   // 整仓库选一侧；以 upstream 为第一父提交，未包含本地历史时以本地为第二父提交
   private async choose(temp: string, local: string, remote: string, strategy: Strategy, reason: string | undefined, refs: RecoveryRefs): Promise<string> {
-    if (strategy === "local") await this.git(["read-tree", "--reset", "-u", local], temp);
+    if (strategy === "local") await this.net(["read-tree", "--reset", "-u", local], temp);
     await this.stageAll(temp);
     if (!(await this.isAncestor(local, remote))) {
       // 新版 Git 拒绝 update-ref 写伪引用，直接写临时 worktree 的 MERGE_HEAD
@@ -394,7 +398,7 @@ export class GitSyncEngine {
     try {
       const state = JSON.parse(await fs.readFile(statePath, "utf8").catch(() => "{}"));
       if (state.monthly === ref) return;
-      if (!(await this.git(["ls-remote", "--refs", c.remote, ref]))) {
+      if (!(await this.net(["ls-remote", "--refs", c.remote, ref]))) {
         // 空 lease 表示只创建，不允许覆盖其他设备已创建的分支
         await this.pushRefs([`${commit}:${ref}`], [`--force-with-lease=${ref}:`]);
       }

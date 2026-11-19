@@ -11,7 +11,8 @@
 | --- | --- | --- |
 | syncIntervalSeconds | 300 | 定时同步间隔，秒 |
 | saveDebounceSeconds | 30 | 最后一次文件修改后静默多少秒才触发自动 onSave |
-| gitTimeoutSeconds | 120 | 单条 Git 命令超时，秒 |
+| gitTimeoutSeconds | 120 | 单条本地 Git 命令超时，秒 |
+| networkTimeoutSeconds | 1800 | 可能传输数据的 Git 命令超时，秒：fetch、push、ls-remote，以及会触发 LFS 下载的检出和合并 |
 | maxFileMiB | 30 | 插件提交的单文件上限，MiB |
 | successDisplayMs | 1000 | 同步结束后的防抖时长，同时为成功 √ 的显示时长，毫秒 |
 | escalateAfterFailures | 5 | 非阻塞失败连续达到此次数后显示 ×（仍不暂停同步） |

@@ -126,7 +126,10 @@ async function failures() {
  race.engine.pushRefs=async(specs,...rest)=>{if(specs[0].endsWith(':refs/heads/main')&&++mainPushes===2)await remoteCommit(race,'second.md','second\n');return originalPush(specs,...rest);};
  await expectCode(()=>run(race,'onSave'),'remote');race.engine.pushRefs=originalPush;await run(race,'onSave');
  for(const file of ['first.md','second.md','mine.md'])assert.notEqual(git(race.remote,'ls-tree','--name-only','main',file),'');
- console.log('PASS missing upstream, refused push, push race, unreachable remote keeps local snapshots');
+ // 网络命令用独立超时：1ms 的 networkTimeoutSeconds 只让 fetch 失败（remote），本地命令不受影响，快照照常提交
+ const t=await fixture('net-timeout',{...DEFAULT_CONFIG,networkTimeoutSeconds:0.001});await write(t.local,'slow.md','x\n');
+ await expectCode(()=>run(t,'onCron'),'remote');assert.equal(git(t.local,'show','HEAD:slow.md'),'x');
+ console.log('PASS missing upstream, refused push, push race, unreachable remote keeps local snapshots, separate network timeout');
 
  // PATH 只含 git → nolfs，且不提交任何内容。仅 Linux：其他平台 git 可能从自带目录或 Homebrew 找到 lfs
  if (process.platform==='linux') {

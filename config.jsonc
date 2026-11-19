@@ -5,8 +5,10 @@
   "syncIntervalSeconds": 300,
   // 最后一次文件修改后静默多少秒才触发自动 onSave；手动保存固定前防抖 500ms
   "saveDebounceSeconds": 30,
-  // 单条 Git 命令超时，秒
+  // 单条本地 Git 命令超时，秒
   "gitTimeoutSeconds": 120,
+  // 可能传输数据的 Git 命令超时，秒：fetch、push、ls-remote，以及会触发 LFS 下载的检出和合并
+  "networkTimeoutSeconds": 1800,
   // 快照中新增或修改文件的大小上限，MiB；超限文件不入库，其余照常同步并显示 !
   "maxFileMiB": 30,
   // 同步结束后的防抖时长，同时作为成功 √ 的显示时长，毫秒
