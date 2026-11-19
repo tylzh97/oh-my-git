@@ -1,5 +1,6 @@
 import { GitError, SyncError, runGit, type ErrorCode, type OversizedFile } from "./git";
 import { DEFAULT_CONFIG, type SyncConfig } from "./config";
+import manifest from "../manifest.json";
 import { createHash, randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import type { Stats } from "node:fs";
@@ -130,7 +131,7 @@ export class GitSyncEngine {
   }
 
   private metadata(action: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-    return { schemaVersion: 2, pluginVersion: "0.0.1", operationId: this.journal.operationId,
+    return { schemaVersion: 2, pluginVersion: manifest.version, operationId: this.journal.operationId,
       event: this.journal.event, action, device: this.device, time: new Date().toISOString(),
       branch: this.context.branch, upstream: this.context.upstream, ...extra };
   }
