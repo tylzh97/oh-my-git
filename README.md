@@ -1,220 +1,136 @@
-# Oh My Git 0.0.1
+# Oh My Git
 
-仅桌面端，Obsidian >= 1.8.7。UI 跟随 Obsidian 中文/英文设置。
+[![nightly](https://github.com/tylzh97/oh-my-git/actions/workflows/nightly.yml/badge.svg)](https://github.com/tylzh97/oh-my-git/actions/workflows/nightly.yml)
+[![license](https://img.shields.io/badge/license-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![Obsidian](https://img.shields.io/badge/Obsidian-%E2%89%A5%201.8.7-7c3aed.svg)](https://obsidian.md)
 
-## 配置与目录
+把 Obsidian Vault 当作 Git 仓库自动同步的桌面端插件。每次操作都先提交快照，不强推、不改写历史：出了问题能找回，也查得清发生过什么。
 
-可调参数集中在插件目录的 `config.jsonc`，启动时读取一次；修改后禁用再启用插件。文件缺失时使用构建时打包的默认值；无法解析时显示 ×。
-格式为 JSONC：允许 `//`、`/* */` 注释和尾随逗号，每个参数的说明直接写在文件注释里。
+## 特性
 
-省略的字段使用默认值。配置值不做校验，写错由用户自行修正。
+- **自动同步**：停止编辑 30 秒后提交并推送，每 5 分钟做一次含拉取的完整同步，按 Ctrl/Cmd+S 也会触发一次完整同步。
+- **不丢数据**：先提交本地快照再整合远程；合并在 Vault 之外进行，冲突不会写进笔记；不使用 `reset --hard` 和 `clean`，不强推。
+- **可恢复**：两台设备的历史分叉时，整合前先把双方各推一个恢复分支；每月另留一个备份分支。
+- **可审计**：插件创建的每个提交都带结构化的元数据，本机保留每次操作的记录。
+- **大文件**：常见的二进制格式自动交给 Git LFS；超过大小上限（默认 30 MiB）的文件跳过并提醒，其余内容照常同步。
+- **状态可见**：状态栏图标区分待机、同步中、成功、警告和需要处理，界面跟随 Obsidian 的中文或英文设置。
 
-```text
-src/
-  main.ts       # Obsidian 事件、状态栏和交互
-  i18n.ts       # 中英文文案字典
-  sync.ts       # 快照、保护、合并、推送和月度备份
-  git.ts        # Git 执行及错误分类
-  config.ts     # JSONC 解析、默认值和配置读取
-  jsonc.d.ts    # 让 tsc 识别 .jsonc 文本导入
-tests/
-  ui.cjs        # 状态、交互和重试
-  manual-save.cjs # 虚拟时钟验证手动保存的前后防抖和命令包装
-  sync.cjs      # 临时仓库中的同步与数据保护
-  config.cjs    # 配置及 Git 错误信息
-  setup.cjs     # setup-git.cmd 的 sh 部分
-  prune.cjs     # prune-recovery.cjs 的列出与删除
-scripts/
-  prune-recovery.cjs # 手动清理旧的恢复分支
-  setup-git.cmd    # 手动执行的 Vault Git 配置脚本（cmd/sh 双语）
-config.jsonc       # 带注释的默认配置，同时打包进 main.js
-dist/              # 构建产物，即分发内容（不入库）
-  manifest.json
-  main.js
-  config.jsonc
-  scripts/prune-recovery.cjs
-  scripts/setup-git.cmd
-```
+## 工作原理
+
+一次完整同步按固定顺序执行，任何一步失败就停下，已经提交的内容不受影响：
+
+1. **快照**：把 Vault 的全部改动提交到本地。
+2. **拉取**：获取远程分支的最新提交。
+3. **整合**：远程领先就快进；双方都有新提交就在 Vault 之外合并，合并成功才写回 Vault。
+4. **推送**：把结果推到远程。
+
+## 前提
+
+- 桌面端 Obsidian 1.8.7 或更高版本，不支持移动端。
+- 系统里装有 Git 和 Git LFS，并且 Obsidian 进程能找到它们。
+- Vault 是一个 Git 仓库，当前分支已经设置远程 upstream。
+- 已配置 `user.name` 和 `user.email`；远程认证和提交签名都不需要交互输入。
+
+插件不会替你安装 Git、初始化仓库或设置远程。macOS 的 PATH 问题和其他细节见 [环境准备与安装](docs/setup.md)。
 
 ## 安装
 
-从社区插件市场安装：只会下载 `main.js` 和 `manifest.json`。需要改配置时，从本仓库复制 `config.jsonc` 到 `<Vault>/.obsidian/plugins/oh-my-git/` 再修改。
+插件尚未上架 Obsidian 社区插件市场，目前从 Release 安装：
 
-手动安装：执行 `npm run build`，然后把 `dist/` 里的全部内容复制到 `<Vault>/.obsidian/plugins/oh-my-git/`，最后在 Obsidian 里启用插件。
-其中只有 `manifest.json` 和 `main.js` 是必需的。`config.jsonc` 不放时使用内置默认值；`scripts/prune-recovery.cjs` 是可选的恢复分支清理工具，`scripts/setup-git.cmd` 是可选的 Git 配置脚本。
-源码仓库应放在 Vault 之外，否则源码会被插件同步进笔记仓库。
+1. 从 [Releases](https://github.com/tylzh97/oh-my-git/releases) 下载 `main.js` 和 `manifest.json`。想用最新代码可以选 [nightly](https://github.com/tylzh97/oh-my-git/releases/tag/nightly)，它随 `main` 的每次提交自动重建。
+2. 把这两个文件放进 `<Vault>/.obsidian/plugins/oh-my-git/`。
+3. 在 Obsidian 的「第三方插件」里启用 Oh My Git。
 
-## 发版
+Release 里的其余文件都是可选的：`config.jsonc` 用来修改配置，`setup-git.cmd` 用来初始化 Vault 仓库，`prune-recovery.cjs` 用来清理旧的恢复分支。两个脚本要放进插件目录下的 `scripts/` 子目录。
 
-**nightly**：`main` 每次更新后，CNB 流水线（`.cnb.yml`）自动测试、构建，把 `nightly` 这个 Tag 移到最新提交，并重建同名的预发布版本，附件为 `dist/` 的全部文件。GitHub 镜像上的 nightly 由 `.github/workflows/nightly.yml` 另行发布。
+也可以从源码构建，产物在 `dist/`，把里面的内容复制到上面的插件目录即可：
 
-**正式版**：
+```bash
+git clone https://github.com/tylzh97/oh-my-git.git
+cd oh-my-git
+npm install
+npm run build
+```
 
-1. 同步修改 `manifest.json`、`package.json` 的 `version`，并在 `versions.json` 中追加 `"<版本>": "<minAppVersion>"`，提交并合入 `main`。
-2. 在该提交上打带附注的 Tag 并推送，Tag 与 `version` 完全一致（不带 `v`）：
+## 快速开始
 
-   ```text
-   git tag -a <版本> -m "<发布说明>"
-   git push origin <版本>
+Vault 已经是配置好远程的 Git 仓库时，安装并启用插件就可以了。否则按下面的步骤准备：
+
+1. 按「安装」放好文件，先不要启用插件。
+2. 运行 `scripts/setup-git.cmd`：Windows 双击，macOS 和 Linux 执行 `sh setup-git.cmd`。它会初始化仓库，写入忽略规则和 LFS 规则，并提交一次。
+3. 添加远程并推送，脚本不处理这一步：
+
+   ```bash
+   git remote add origin <你的仓库地址>
+   git push -u origin main
    ```
 
-3. CNB 流水线自动完成其余步骤：校验 Tag 与上面三个文件里的版本一致，测试、构建，创建 Release（说明取 Tag 的附注信息），上传 `dist/` 的全部文件。校验或测试失败时不会创建 Release。
-4. CNB 发布成功后，流水线把这个 Tag 推到 GitHub。那里的 `.github/workflows/release.yml` 再独立校验、测试、构建一遍，发布同名 Release。Obsidian 社区市场从 GitHub 的 Release 取 `main.js` 和 `manifest.json`。
+4. 启用插件。状态栏出现同步图标，启动时会先做一次完整同步，之后正常写笔记即可。
 
-只有数字开头的 Tag 会触发发布，两边的流水线配置都取自 Tag 所在的提交。其他 Tag 不会同步到 GitHub。
+## 使用
+
+### 什么时候同步
+
+| 触发 | 做什么 |
+| --- | --- |
+| 启动插件 | 完整同步：提交本地改动，拉取并整合远程，推送 |
+| 每 5 分钟 | 完整同步 |
+| 按 Ctrl/Cmd+S | 完整同步 |
+| 停止编辑 30 秒后 | 提交并推送，不主动拉取 |
+| 重命名文件或文件夹 | 提交并推送，不主动拉取 |
+| 点击状态栏图标 | 提交并推送，不主动拉取 |
+
+### 状态栏图标
+
+| 图标 | 含义 |
+| --- | --- |
+| 同步图标 | 待机 |
+| 旋转的图标 | 同步中 |
+| 绿色 √ | 刚同步成功 |
+| 黄色 ! | 上次同步失败，或有文件超过大小上限被跳过；后续照常同步 |
+| 红色 × | 需要你处理，同步已暂停 |
+
+把鼠标停在图标上可以看到具体原因。
+
+### 出现红色 × 时
+
+点击图标，在菜单里选「重试」。配置文件无法读取时没有菜单，修正后需要禁用再启用插件。
+
+如果原因是历史冲突，比如两台设备改了同一处内容，菜单里还会有「保持远程」和「保持本地」。这两项选的是**整个仓库**的版本：另一侧的改动不会留在 Vault 里，包括那些并不冲突的文件。它们仍然保存在 Git 历史和恢复分支中，需要时用 Git 取回，见 [数据保护](docs/data-protection.md)。
+
+## 配置
+
+默认配置可以直接使用。需要调整时，把 `config.jsonc` 放进插件目录后修改，再禁用并启用插件。可以调整同步间隔、自动保存的等待时长、单文件大小上限、LFS 扩展名等，每个参数的说明都写在 [`config.jsonc`](config.jsonc) 的注释里。
+
+## 注意事项
+
+- 只备份 Git 跟踪的内容：被 `.gitignore` 忽略的文件不在备份范围内。
+- Vault 里嵌套的 Git 仓库只会被记录成一个引用，里面的文件不会被备份。
+- 多台设备同步时，建议忽略 `.obsidian/workspace*.json`，否则几乎每次都会冲突。`setup-git.cmd` 写入的忽略规则已经包含它。
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [环境准备与安装](docs/setup.md) | 前提条件、`setup-git.cmd` 做了什么、安装布局和配置文件 |
+| [同步机制](docs/sync.md) | 每个事件做什么、防抖与排队、状态和失败分类 |
+| [数据保护](docs/data-protection.md) | 整合与应用、恢复分支、月度备份、空日记、大文件与 LFS |
+| [审计与排查](docs/audit.md) | 提交元数据、本机操作记录、中断后的清理 |
+| [开发与发版](docs/development.md) | 目录结构、构建与测试、nightly 和正式版的发布流程 |
+
+## 开发
+
+```bash
+npm install
+npm test
+```
+
+`npm test` 会先构建，再在临时仓库里跑全部测试，不访问网络。详见 [开发与发版](docs/development.md)。
+
+## 反馈
+
+问题和建议请提 [Issue](https://github.com/tylzh97/oh-my-git/issues)。
 
 ## 许可证
 
 [AGPL-3.0-or-later](LICENSE)
-
-## 前提
-
-- 系统 PATH 中有 Git 和 git lfs，Obsidian 进程能找到它们。macOS 从 Dock 启动的应用不继承 shell PATH，插件会自动追加 `/opt/homebrew/bin` 和 `/usr/local/bin`；装在其他位置的需自行处理。缺少 Git 或 git lfs 时显示 × 和安装提示（macOS 给出 brew 命令），插件不会代为安装。
-- Vault 是 Git 仓库，当前分支配置了远程 upstream，且不以 `ogit/` 开头。
-- 配置好 user.name、user.email；认证和签名必须能在非交互环境下完成。
-
-建议在 Vault 的 .gitignore 中忽略 `.obsidian/workspace*.json`：Obsidian 会不停地改写这些文件，多台设备同步时几乎每次都会冲突。`scripts/setup-git.cmd` 可以一次配好。
-
-## Git 配置脚本 setup-git.cmd
-
-手动执行，不会被插件自动调用。Windows 双击或在 cmd 中运行；macOS/Linux 执行 `sh setup-git.cmd`。运行前关闭 Obsidian 或禁用插件。
-
-1. 从脚本所在目录向上找第一个名为 `.obsidian` 的目录，其父目录即 Vault。
-2. Vault 下没有 `.git` 时执行 `git init -b main` 和 `git lfs install --local`。
-3. `.gitattributes` 没有 `# BEGIN OGIT LFS` 区块时追加（与插件默认 lfsExtensions 一致，之后由插件按配置维护）；`.gitignore` 没有 `# BEGIN OGIT IGNORE` 区块时追加。已有区块跳过，用户自己的规则不动。
-4. 已有仓库：按全部 ignore 规则取消跟踪已被忽略的文件，磁盘文件保留。推送后，其他设备下次合并时会删除它们本地的这些文件，历史中仍可找回。
-5. 提交：新仓库提交整个 Vault（`ogit: initialize vault (setup-git)`），已有仓库只提交规则变更（`ogit: apply ignore and LFS rules (setup-git)`）。不推送，也不处理 remote，remote 由用户维护。
-
-重复执行是安全的。缺少 Git、git lfs（仅初始化时需要）或 user.name/user.email 时给出提示后退出，不会代为安装。
-脚本必须保持 LF 换行（仓库 `.gitattributes` 已约束）；规则数据只写一份，在文件末尾的 `#I`/`#A` 行。
-
-插件不会安装 Git、初始化仓库、设置 upstream，也不会强推工作分支。Vault 的 .gitignore 由用户维护，被忽略的文件不在备份范围内。其他不满足条件的情况由 Git 自身报错，错误信息打印在控制台。
-
-## 事件
-
-- onLoad / onRetry / onResolve / onCron / onManualSave：提交本地变化 → fetch upstream → 落后则快进，分叉则保护双方并在临时 worktree 中整合 → 应用到 Vault → push → 月度备份。
-- onSave / onRename / onClick：提交整个仓库 → push → 月度备份，不主动拉取。push 被拒且远程已前进时，按上面的方式整合后重推一次。
-- 没有新提交（本地与 upstream 相同）时不 push。
-- 打开和关闭文件不触发同步。Obsidian 之外对 Vault 的修改最迟由下一次 onCron 提交。
-- onSave 带防抖：每次文件修改都把计时器重置为 saveDebounceSeconds，静默期满才同步一次。连续编辑期间由 onCron 兜底。其他事件开始同步时会取消计时器，因为这次同步已包含这些修改。
-- onRename：Obsidian 中重命名文件或文件夹后请求同步，不走自动保存的 30 秒防抖。空闲且不在前后防抖窗口时立即执行，快照前未继续编辑的情况下，改名会单独形成一个提交（相似度 100%），用 `git log --follow -- <新路径>` 可以追溯到改名前的历史。Git 本身不记录重命名，`git mv` 与 `add -A` 的结果相同，所以插件不使用 `git mv`。
-- 「重试」统一按 onLoad 模式完整执行一次。
-- Ctrl/Cmd+S 保留 Obsidian 原来的保存，同时请求真实的完整双向同步（onManualSave），即使没有本地修改也会 fetch：
-  - **前防抖固定 500ms**：最后一次保存请求后静默 500ms 才执行，连续按会重置计时。不提前转圈或显示 √。
-  - **后防抖为 successDisplayMs**（默认 1000ms）：从 Git 同步结束时开始，成功时在此期间显示 √。Git 任务锁已释放，但窗口内的新请求只排队，不提前开始下一次同步。
-  - 有待处理请求时，下次开始时间为 `max(最后一次手动保存请求时间 + 500ms, 上次同步结束时间 + successDisplayMs)`。没有新请求则回到待机，不额外同步。
-  - 同步期间及成功展示期间的新保存合并保留一次，覆盖期间的新修改。普通失败也经过后防抖；阻塞失败仍须处理后显式重试。手动同步开始时取消已有的自动保存计时器。
-  - 挂载方式由 saveHook 决定：
-    - `command`（默认）：包装 Obsidian 内部命令 `editor:save-file`，先执行原保存；若返回 Promise，等待成功后再启动前防抖，原返回值保持不变。覆盖快捷键、命令面板和自定义保存快捷键。这是**未公开 API**；找不到命令时只记日志，手动同步快捷键不生效。卸载时恢复原回调。
-    - `keydown`：在 `window` 捕获阶段观察 Ctrl/Cmd+S，不拦截原保存，500ms 前防抖后请求同步。兼容输入法物理键位 KeyS 和弹出窗口，仅覆盖键盘快捷键；不能等待原保存命令的异步返回值。
-  - 排查时，在 Console 中过滤 `Oh My Git`，查看 `Hooked save command`、`Save command executed`、`Save shortcut detected`、`Sync queued` 和真实同步结果日志。
-- onUnload：请求取消，当前 Git 命令执行完后不再启动后续步骤。
-
-同步进行中及前后防抖窗口内，新事件合并为一次待处理的完整同步（含 fetch），满足防抖条件后补跑。重试和冲突选边保留对应事件及策略。阻塞失败不会自动补跑普通事件；插件卸载会取消全部计时器和待处理请求。忙时或防抖窗口内的重命名可能和后续编辑进入同一个快照，不保证独立提交。
-
-| 状态 | 行为 |
-| --- | --- |
-| 同步图标 | 待机，接收事件 |
-| 旋转图标 | 同步中 |
-| 绿色 √ | 成功 |
-| 黄色 ! | 普通失败或跳过了超限文件，后续事件照常同步 |
-| 红色 × | 需要关注；点击打开菜单「重试」 |
-
-失败分两类：
-
-- **阻塞**（立即 ×，暂停普通事件，直到重试成功）：config.jsonc 无法读取（`config`）、仓库状态不满足，例如没有 upstream 或分离 HEAD（`repo`）、远程拒绝推送，例如 hook、受保护分支或权限（`refused`）、历史冲突（`conflict`）。历史冲突时菜单额外提供「保持远程 / 保持本地」。
-- **不阻塞**：仓库有未完成的手动 Git 操作（`unfinished`，见下）、无法连接远程或认证失败（`remote`），以及其余失败（`failed`）。显示 !，普通事件仍照常执行，本地快照不会中断；下一次成功后恢复。
-
-`unfinished`：你在终端执行 merge、cherry-pick、revert 或 rebase 且尚未完成时（存在 `MERGE_HEAD` 等标记，或索引里有未合并的文件），插件在修改仓库**之前**就停下，不会把冲突标记当作已解决提交和推送。你完成（`git commit`）或取消（`--abort`）之后，下一次事件会自动恢复同步，不需要点重试。
-
-错误分类只看 Git 的退出码和结构化输出，不匹配报错文字：push 的 `--porcelain` 输出中有 `!` 开头的行，表示引用被拒绝（再根据远程是否分叉区分 `conflict` 和 `refused`）；没有这类行，说明没能与远程完成通信（`remote`）。网络故障和认证失败无法区分，统一按 `remote` 计数。
-失败时 Git 的原始输出会打印到控制台（Ctrl+Shift+I → Console，`[Oh My Git]` 前缀），其中可能包含 remote URL。
-
-## 数据保护
-
-- 分叉整合前，本地和远程各推送一个不可变恢复分支，推送失败就停止，本地也不留分支；整合结果另存一个本地 result 分支。快进不创建恢复分支：双方提交都已在 upstream 上。
-- 整合失败后重试时，双方提交都没变就复用已推送的那一组恢复分支，result 改指最近一次的整合结果；任何一方有了新提交才新建一组。复用只在插件本次运行期间有效，重启后会再建一组。
-- 合并在临时 worktree 中进行，冲突不写入 Vault。
-- 用两树 `read-tree -m -u` 应用结果：Git 会拒绝覆盖未提交的修改和未跟踪文件，应用前额外检查被忽略文件的路径冲突（包含文件/目录互换），有冲突就停止，由用户移走本地文件后重试。Vault 内不使用 reset --hard 或 clean。
-- 日常 push 被拒绝时会 fetch：远程未前进视为服务端拒绝（×）；前进了则快进或保护双方后整合并重推，只有内容冲突才进入 ×。
-- 重推时远程又前进（多台设备抢推送）按网络错误处理，下次同步再整合，不进入 ×。
-- onCron 和 push 被拒的日常事件也会把远程改动写入 Vault。若从快照到写入的几秒内，用户正好编辑了远程也改过的文件，read-tree 会拒绝覆盖并报错，数据不受影响，下次同步重新整合。
-- 远程不可用时，本地快照照常提交；恢复连接后的下一次同步会一并推送。
-- 保持本地/远程：选择整个 Git 跟踪文件树，以 upstream 为第一父提交；upstream 尚未包含本地历史时，以本地快照为第二父提交。不使用 rebase，不强推。
-
-## 空日记
-
-Obsidian 启动时会自动创建当天的空日记。如果另一台设备已经推送了同名日记，空文件会导致 add/add 冲突，或者挡住合并结果的写入。插件按以下规则处理"空 md"，即**未跟踪**、0 字节的 `.md` 文件（扩展名不区分大小写，不含符号链接）：
-
-| 范围 | 时机 | 条件 | 动作 |
-| --- | --- | --- | --- |
-| 全 Vault | 每次快照 | — | 不 add，文件留在磁盘 |
-| 全 Vault | 整合时，应用结果前 | 合并结果里有同名文件，且删除前复查仍为 0 字节 | 删除（0 字节，无损） |
-
-- 已跟踪文件、非 `.md` 文件不受影响：清空一篇已跟踪的笔记照常提交。
-- 不在状态栏提示。跳过和删除的路径记在 history-YYYY-MM.jsonl 的 `emptySkipped`、`emptiesRemoved` 字段；`emptySkipped` 只在列表与上次不同时记录。
-
-## 分支命名
-
-- `ogit/recovery/<原因>/<UTC时间>-<设备ID>-<随机ID>/local|remote|result`
-- 原因：merge、push-rejected、keep-local、keep-remote，取这对提交首次被保护时的原因
-- `ogit/monthly/YYYY-MM/<安全分支名>-<分支名 SHA256 前8位>`
-
-每月首次成功推送后创建当月的备份分支（月份按本地时区），已存在的不会覆盖（create-only lease）。失败只记日志，下次同步再试，不影响主线同步结果；state.json 损坏同样只影响月度备份，修正或删除该文件后重试。恢复分支不会自动删除。
-
-### 清理恢复分支
-
-每对分叉的提交整合时会新增一组恢复分支，长期使用后可以手动清理。在插件目录执行：
-
-```text
-node scripts/prune-recovery.cjs [Vault路径] [天数=90] [--delete]
-```
-
-- 默认只列出早于指定天数的 `ogit/recovery/*` 分支（当前分支 upstream 所在的远程，以及本地），不删除；加 `--delete` 才删除，删除后无法撤销。
-- 年龄只取自分支名里的 UTC 时间，**不检查**这些提交是否已合入主线；名字无法解析的分支保留。`ogit/monthly/*` 不受影响。
-- 整合成功并推送后，双方提交都是结果提交的父提交，恢复分支只是冗余；整合失败后一直没有解决的那些才是唯一副本，删除前先看列表。
-
-## 提交大小与 LFS
-
-- 暂存前，会检查本次新增或修改的文件在工作区的实际大小（LFS 文件同样按实际大小计算）。超过 maxFileMiB 的文件不会执行 add 或 LFS clean，已有暂存会被取消、**不入库**，其余内容照常提交和推送，然后显示 ! 并列出被跳过的文件。工作区文件不受影响。之后每次同步都会继续跳过并提醒，直到你把它加入 .gitignore 或删除。
-- 已经在历史中的大文件（例如从远程合并进来，或者在终端手动提交的）不受限制，启动合并照常进行；只有在本地被修改时，新内容才受限。
-- 插件维护 .gitattributes 中的 OGIT LFS 区块，不改动区块外的用户规则。
-- LFS 对象由 `git lfs install --local` 安装的 pre-push hook 上传；不会覆盖用户自定义的 pre-push hook，有冲突时 Git LFS 报错，需要自行整合。
-- 已有历史不重写、不迁移。
-
-## 提交元数据（schemaVersion 3）
-
-提交标题固定为英文，正文中用 Ogit-Metadata-Begin / Ogit-Metadata-End 包围一段 JSON：operationId、event、action、device、time、branch、upstream；整合提交还包含 localCommit、remoteCommit、两个恢复分支名，选边提交另有 strategy。
-
-查看某个提交的元数据：`git show -s --format=%B <提交ID>`。
-查看已推送的快照：`git show <恢复分支>:<文件路径>`。LFS 文件显示的是指针，恢复二进制需要在独立 worktree 中执行 lfs pull。
-
-## 操作记录
-
-本机记录位于 Vault 之外的 `%LOCALAPPDATA%/ObsidianOhMyGit/<仓库ID>/`（非 Windows 为 `~/.local/state/...`）：
-
-```text
-device.txt           # 保留：本机设备 ID
-state.json           # 保留：月度备份进度
-history-YYYY-MM.jsonl  # 保留：每次操作的记录（阶段、提交、恢复分支、错误码和 Git 输出），按本地时区的月份分文件
-.omg.pending.json    # 临时：进行中操作的记录
-.omg.worktree-<id>/  # 临时：合并用的 worktree
-```
-
-以 `.omg.` 开头的都是临时产物。正常结束的操作会把记录追加到 history-YYYY-MM.jsonl，并删除 pending。
-Obsidian 被强制退出时可能留下残留。插件**启动时**会自动清理：把残留的 pending 以 `outcome: "interrupted"` 归档到 history-YYYY-MM.jsonl，删除所有 `.omg.*`，执行 `git worktree prune`。
-插件**从不删除** `index.lock`：残留 pending 只能说明上次同步中断了，不能说明锁是谁的（可能是你之后启动的 Git，比如正在编辑提交信息的 `git commit`）。如果有残留 pending，同时 `index.lock` 存在，会显示阻塞的 ×（`repo`），提示锁文件路径；请确认没有 Git 进程在运行后手动删除，再点重试。
-如果在把合并结果应用到 Vault 的途中被打断，下次快照会把已经应用的部分当作本地修改提交，再与远程合并（通常能干净合并）。合并前双方的原始提交都在恢复分支里，不会丢。
-插件重新加载时，如果旧实例的同步仍在执行，新实例的这次同步会失败一次（!），等旧实例结束后恢复正常。
-
-## 开发与验证
-
-```text
-npm install
-npm run build
-npm test
-```
-
-测试会创建独立的临时本地仓库和 bare 远程仓库，不访问网络；临时目录会打印并保留，供审计。
-`npm run build` 会清空并重建 `dist/`；`npm test` 会先执行构建，UI 测试直接加载 `dist/main.js`。
-修改 src/ 后，重新构建并把 `dist/` 复制到 Vault 的插件目录，再禁用并启用插件。只修改插件目录里的 config.jsonc 时，重新启用插件即可。
