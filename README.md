@@ -7,19 +7,6 @@
 可调参数集中在插件目录的 `config.jsonc`，启动时读取一次；修改后禁用再启用插件。文件缺失时使用构建时打包的默认值；无法解析时显示 ×。
 格式为 JSONC：允许 `//`、`/* */` 注释和尾随逗号，每个参数的说明直接写在文件注释里。
 
-| 参数 | 默认值 | 说明 |
-| --- | --- | --- |
-| syncIntervalSeconds | 300 | 定时同步间隔，秒 |
-| saveDebounceSeconds | 30 | 最后一次文件修改后静默多少秒才触发自动 onSave |
-| gitTimeoutSeconds | 120 | 单条本地 Git 命令超时，秒 |
-| networkTimeoutSeconds | 1800 | 可能传输数据的 Git 命令超时，秒：fetch、push、ls-remote，以及会触发 LFS 下载的检出和合并 |
-| maxFileMiB | 30 | 插件提交的单文件上限，MiB |
-| successDisplayMs | 1000 | 同步结束后的防抖时长，同时为成功 √ 的显示时长，毫秒 |
-| escalateAfterFailures | 5 | 非阻塞失败连续达到此次数后显示 ×（仍不暂停同步） |
-| saveHook | "command" | Ctrl/Cmd+S 真实同步的挂载方式：`command` 或 `keydown`，见「事件」 |
-| monthlyBackupEnabled | true | 是否创建月度备份分支 |
-| lfsExtensions | 见配置文件 | LFS 扩展名，不含点，大小写不敏感 |
-
 省略的字段使用默认值。配置值不做校验，写错由用户自行修正。
 
 ```text
