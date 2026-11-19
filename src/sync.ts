@@ -7,7 +7,7 @@ import type { Stats } from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 
-export type SyncEvent = "onClick" | "onLoad" | "onOpen" | "onSave" | "onManualSave" | "onClose" | "onRename" | "onCron" | "onResolve" | "onRetry";
+export type SyncEvent = "onClick" | "onLoad" | "onSave" | "onManualSave" | "onRename" | "onCron" | "onResolve" | "onRetry";
 export type Strategy = "local" | "remote";
 export interface SyncDetails { path?: string | null; source?: string; strategy?: Strategy; reason?: string }
 export interface SyncResult { skipped: OversizedFile[] }

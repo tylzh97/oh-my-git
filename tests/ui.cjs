@@ -29,7 +29,7 @@ const button = {
   getBoundingClientRect() { return { left: 0, top: 0 }; },
 };
 const sdk = {
-  Plugin: class {}, FileSystemAdapter, FileView: class {}, TFile: class {}, Menu,
+  Plugin: class {}, FileSystemAdapter, TFile: class {}, Menu,
   getLanguage() { return language; }, setIcon(_, value) { icon = value; }, setTooltip(_, value) { tooltip = value; },
 };
 const context = {
@@ -53,7 +53,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   p.saveCalls = []; p.saveCommand = { id: 'editor:save-file', checkCallback(checking) { p.saveCalls.push(checking); return true; } };
   p.app = {
     vault: { adapter, configDir: '.custom', on(name, fn) { p.vaultEvents[name] = fn; return {}; } },
-    workspace: { on(name, fn) { p.workspaceEvents[name] = fn; return {}; }, onLayoutReady(fn) { fn(); }, iterateAllLeaves() {} },
+    workspace: { on(name, fn) { p.workspaceEvents[name] = fn; return {}; }, onLayoutReady(fn) { fn(); } },
     commands: { commands: { 'editor:save-file': p.saveCommand } },
   };
   p.addStatusBarItem = () => button;
@@ -82,7 +82,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
     await q.sync('onClick'); assert.equal(q.state, 'error'); assert.ok(tooltip.includes(text));
   }
   const blocked = requests.length;
-  for (const event of ['onClick', 'onLoad', 'onOpen', 'onSave', 'onClose', 'onCron']) await p.sync(event);
+  for (const event of ['onClick', 'onLoad', 'onSave', 'onRename', 'onCron']) await p.sync(event);
   assert.equal(requests.length, blocked);
   p.activate(); assert.deepEqual(p.menu.items.map(item => item.title), ['重试']);
   p.menu.items[0].click(); await tick(); assert.equal(requests.at(-1).event, 'onRetry');
@@ -103,7 +103,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   await w.sync('onLoad'); assert.equal(w.state, 'warning'); assert.equal(icon, 'triangle-alert');
   assert.equal(color, 'var(--text-warning)'); assert.ok(tooltip.includes('后续同步正常触发'));
   assert.ok(logs.some(args => args[1]?.message === 'git push: Connection reset'));
-  for (const event of ['onOpen', 'onSave', 'onClose']) {
+  for (const event of ['onRename', 'onSave', 'onClick']) {
     const count = requests.length;
     await w.sync(event);
     assert.equal(requests.length, count + 1); assert.equal(requests.at(-1).event, event); assert.equal(w.state, 'warning');
@@ -122,7 +122,7 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   r.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('remote', 'git fetch: Could not resolve host'); } };
   for (let i = 1; i <= 4; i++) { await r.sync('onCron'); assert.equal(r.state, 'warning'); }
   r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('failed'); };
-  await r.sync('onOpen'); assert.equal(r.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('连续多次失败') && tooltip.includes('(5)'));
+  await r.sync('onRename'); assert.equal(r.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('连续多次失败') && tooltip.includes('(5)'));
   const escalated = requests.length; await r.sync('onSave'); assert.equal(requests.length, escalated + 1); assert.equal(r.state, 'error');
   r.activate(); assert.deepEqual(r.menu.items.map(item => item.title), ['重试']); r.menu.hide();
   r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };

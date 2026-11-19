@@ -92,8 +92,9 @@ dist/              # 构建产物，即分发内容（不入库）
 ## 事件
 
 - onLoad / onRetry / onResolve / onCron / onManualSave：提交本地变化 → fetch upstream → 落后则快进，分叉则保护双方并在临时 worktree 中整合 → 应用到 Vault → push → 月度备份。
-- onOpen / onSave / onClose / onRename / onClick：提交整个仓库 → push → 月度备份，不主动拉取。push 被拒且远程已前进时，按上面的方式整合后重推一次。
+- onSave / onRename / onClick：提交整个仓库 → push → 月度备份，不主动拉取。push 被拒且远程已前进时，按上面的方式整合后重推一次。
 - 没有新提交（本地与 upstream 相同）时不 push。
+- 打开和关闭文件不触发同步。Obsidian 之外对 Vault 的修改最迟由下一次 onCron 提交。
 - onSave 带防抖：每次文件修改都把计时器重置为 saveDebounceSeconds，静默期满才同步一次。连续编辑期间由 onCron 兜底。其他事件开始同步时会取消计时器，因为这次同步已包含这些修改。
 - onRename：Obsidian 中重命名文件或文件夹后请求同步，不走自动保存的 30 秒防抖。空闲且不在前后防抖窗口时立即执行，快照前未继续编辑的情况下，改名会单独形成一个提交（相似度 100%），用 `git log --follow -- <新路径>` 可以追溯到改名前的历史。Git 本身不记录重命名，`git mv` 与 `add -A` 的结果相同，所以插件不使用 `git mv`。
 - 「重试」统一按 onLoad 模式完整执行一次。

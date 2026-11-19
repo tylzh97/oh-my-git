@@ -1,4 +1,4 @@
-import { FileSystemAdapter, FileView, Menu, Plugin, TFile, setIcon, setTooltip } from "obsidian";
+import { FileSystemAdapter, Menu, Plugin, TFile, setIcon, setTooltip } from "obsidian";
 import { GitSyncEngine, type SyncDetails, type SyncEvent } from "./sync";
 import { SyncError, type ErrorCode } from "./git";
 import { DEFAULT_CONFIG, loadConfig, type SyncConfig } from "./config";
@@ -13,7 +13,6 @@ type SaveCommand = Partial<Record<typeof SAVE_CALLBACKS[number], (...args: unkno
 
 export default class OhMyGitPlugin extends Plugin {
   private enabled = false;
-  private openFiles = new Set<string>();
   private button?: HTMLElement;
   private task?: AbortController;
   private pending?: { event: SyncEvent; details?: SyncDetails };
@@ -226,11 +225,6 @@ export default class OhMyGitPlugin extends Plugin {
     const text = await this.app.vault.adapter.read(`${this.app.vault.configDir}/daily-notes.json`).catch(() => "");
     try { return String(JSON.parse(text).folder ?? "").replace(/^\/+|\/+$/g, ""); } catch { return ""; }
   }
-  private collectOpenFiles(): Set<string> {
-    const files = new Set<string>();
-    this.app.workspace.iterateAllLeaves(leaf => { if (leaf.view instanceof FileView && leaf.view.file) files.add(leaf.view.file.path); });
-    return files;
-  }
   async onload(): Promise<void> {
     this.enabled = true; this.state = "idle";
     const adapter = this.app.vault.adapter;
@@ -255,7 +249,6 @@ export default class OhMyGitPlugin extends Plugin {
       this.log("Plugin initialization failed", { code: this.failure.code, message: this.failure.message }); this.render(); return;
     }
     this.registerInterval(window.setInterval(() => this.trigger("onCron"), this.config.syncIntervalSeconds * 1000));
-    this.registerEvent(this.app.workspace.on("file-open", file => this.trigger("onOpen", { path: file?.path ?? null, source: "workspace:file-open" })));
     this.registerEvent(this.app.vault.on("modify", file => { if (file instanceof TFile) this.scheduleSave(file.path); }));
     // 改名绕过自动保存防抖；忙时或前后防抖窗口内仍合并排队
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => this.trigger("onRename", { path: file.path, source: `vault:rename from ${oldPath}` })));
@@ -263,17 +256,18 @@ export default class OhMyGitPlugin extends Plugin {
       if (!this.enabled) return;
       // 布局就绪后核心命令已全部注册
       if (this.config.saveHook === "command") this.hookSaveCommand(); else this.listenSaveKey();
-      this.openFiles = this.collectOpenFiles();
-      this.registerEvent(this.app.workspace.on("layout-change", () => {
-        const current = this.collectOpenFiles();
-        for (const file of this.openFiles) if (!current.has(file)) this.trigger("onClose", { path: file, source: "last file view removed" });
-        this.openFiles = current;
-      }));
     });
     this.trigger("onLoad");
   }
   onunload(): void {
-    this.log("onUnload"); this.enabled = false; this.pending = undefined; this.manualSaveDue = 0; window.clearTimeout(this.saveTimer); window.clearTimeout(this.syncTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
-    this.openFiles.clear(); this.button = undefined;
+    this.log("onUnload");
+    this.enabled = false;
+    this.pending = undefined; this.manualSaveDue = 0;
+    window.clearTimeout(this.saveTimer);
+    window.clearTimeout(this.syncTimer);
+    this.menu?.hide();
+    this.task?.abort();
+    this.animation?.cancel();
+    this.button = undefined;
   }
 }
