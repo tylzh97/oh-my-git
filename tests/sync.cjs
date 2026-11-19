@@ -106,7 +106,10 @@ async function conflicts() {
 }
 
 async function stateDir(f) { const base=path.join(f.base,'state');return path.join(base,(await fs.readdir(base))[0]); }
-async function history(f) { return (await fs.readFile(path.join(await stateDir(f),'history.jsonl'),'utf8')).trim().split('\n').map(line=>JSON.parse(line)); }
+async function history(f) {
+ const now=new Date(),file=`history-${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}.jsonl`;
+ return (await fs.readFile(path.join(await stateDir(f),file),'utf8')).trim().split('\n').map(line=>JSON.parse(line));
+}
 
 async function failures() {
  const n=await fixture('no-upstream');git(n.local,'branch','--unset-upstream');await expectCode(()=>run(n),'repo');

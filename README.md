@@ -151,7 +151,7 @@ Obsidian 启动时会自动创建当天的空日记。如果另一台设备已�
 - 日记目录取自核心插件「日记」的配置 `<configDir>/daily-notes.json` 中的 `folder`（含子目录），启动时读取一次。文件不存在、无法解析或 `folder` 为空（日记放在 Vault 根目录）时，不做 onLoad 清理；撞名删除不依赖日记目录。
 - 创建时间：Windows/macOS 用 birthtime，其他平台或 birthtime 无效时用 mtime。"今天"按本机时区的自然日。
 - 已跟踪文件、非 `.md` 文件不受影响：清空一篇已跟踪的笔记照常提交。
-- 不在状态栏提示。跳过和删除的路径记在 history.jsonl 的 `emptySkipped`、`emptiesRemoved` 字段；`emptySkipped` 只在列表与上次不同时记录。
+- 不在状态栏提示。跳过和删除的路径记在 history-YYYY-MM.jsonl 的 `emptySkipped`、`emptiesRemoved` 字段；`emptySkipped` 只在列表与上次不同时记录。
 
 ## 分支命名
 
@@ -183,13 +183,13 @@ Obsidian 启动时会自动创建当天的空日记。如果另一台设备已�
 ```text
 device.txt           # 保留：本机设备 ID
 state.json           # 保留：月度备份进度
-history.jsonl        # 保留：每次操作的记录（阶段、提交、恢复分支、错误码和 Git 输出）
+history-YYYY-MM.jsonl  # 保留：每次操作的记录（阶段、提交、恢复分支、错误码和 Git 输出），按本地时区的月份分文件
 .omg.pending.json    # 临时：进行中操作的记录
 .omg.worktree-<id>/  # 临时：合并用的 worktree
 ```
 
-以 `.omg.` 开头的都是临时产物。正常结束的操作会把记录追加到 history.jsonl，并删除 pending。
-Obsidian 被强制退出时可能留下残留。插件**启动时**会自动清理：把残留的 pending 以 `outcome: "interrupted"` 归档到 history.jsonl，删除所有 `.omg.*`，执行 `git worktree prune`。
+以 `.omg.` 开头的都是临时产物。正常结束的操作会把记录追加到 history-YYYY-MM.jsonl，并删除 pending。
+Obsidian 被强制退出时可能留下残留。插件**启动时**会自动清理：把残留的 pending 以 `outcome: "interrupted"` 归档到 history-YYYY-MM.jsonl，删除所有 `.omg.*`，执行 `git worktree prune`。
 插件**从不删除** `index.lock`：残留 pending 只能说明上次同步中断了，不能说明锁是谁的（可能是你之后启动的 Git，比如正在编辑提交信息的 `git commit`）。如果有残留 pending，同时 `index.lock` 存在，会显示阻塞的 ×（`repo`），提示锁文件路径；请确认没有 Git 进程在运行后手动删除，再点重试。
 如果在把合并结果应用到 Vault 的途中被打断，下次快照会把已经应用的部分当作本地修改提交，再与远程合并（通常能干净合并）。合并前双方的原始提交都在恢复分支里，不会丢。
 插件重新加载时，如果旧实例的同步仍在执行，新实例的这次同步会失败一次（!），等旧实例结束后恢复正常。

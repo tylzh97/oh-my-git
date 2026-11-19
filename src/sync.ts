@@ -33,6 +33,8 @@ const RUNNING = Symbol.for("omg-sync.running");
 const shared = globalThis as typeof globalThis & { [RUNNING]?: boolean };
 // 用户手动执行且尚未完成的 Git 操作标记（位于当前 worktree 的 git 目录）
 const UNFINISHED = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply"];
+// 本地时区的 YYYY-MM：月度备份分支和 history 文件共用
+const localMonth = (date = new Date()): string => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 const exists = (file: string): Promise<boolean> => fs.stat(file).then(() => true, () => false);
 // 跨过零点不久的空日记先保留，避免刚创建就被删
 const DIARY_GRACE_MS = 2 * 60 * 60 * 1000;
@@ -84,7 +86,8 @@ export class GitSyncEngine {
     this.log("Git phase", { operationId: this.journal.operationId, phase });
   }
   private async appendHistory(record: unknown): Promise<void> {
-    await fs.appendFile(path.join(this.stateDir, "history.jsonl"), JSON.stringify(record) + "\n");
+    // 按月分文件，记录一条不少；旧月份文件由用户自行归档或删除
+    await fs.appendFile(path.join(this.stateDir, `history-${localMonth()}.jsonl`), JSON.stringify(record) + "\n");
   }
 
   // 启动时清理上次强制退出留下的临时产物；正常结束的 run 不会留下 .omg.*
@@ -384,8 +387,7 @@ export class GitSyncEngine {
   private async monthly(commit: string): Promise<void> {
     if (!this.config.monthlyBackupEnabled) return;
     const c = this.context;
-    const date = new Date();
-    const month = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+    const month = localMonth();
     const key = `${c.branch.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 48)}-${createHash("sha256").update(c.branch).digest("hex").slice(0, 8)}`;
     const ref = `refs/heads/ogit/monthly/${month}/${key}`;
     const statePath = path.join(this.stateDir, "state.json");
