@@ -1,0 +1,38 @@
+# 推送数字开头的 Tag 后校验版本、测试、构建，并发布同名的正式 Release。
+# Obsidian 社区市场从这里的 Release 取 main.js 和 manifest.json
+name: release
+
+on:
+  push:
+    tags: ["[0-9]*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      # v7 按 Tag 引用拉取，附注得以保留；v4 只按提交拉取，本地 Tag 会变成轻量 Tag，说明会退化成提交信息
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      # Tag 必须与 manifest.json、package.json 的版本一致，versions.json 里要有这一条
+      - name: check version
+        run: |
+          test "$(node -p 'require("./manifest.json").version')" = "$GITHUB_REF_NAME"
+          test "$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
+          test "$(node -p 'const m = require("./manifest.json"); require("./versions.json")[m.version] === m.minAppVersion')" = true
+      - run: npm ci
+      # 集成测试需要 git-lfs，ubuntu runner 已自带
+      - run: npm test
+      # 说明取 Tag 的附注信息（git tag -a）；--verify-tag 保证只为已推送的 Tag 发布
+      - name: publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/main.js dist/manifest.json dist/config.jsonc dist/scripts/setup-git.cmd dist/scripts/prune-recovery.cjs \
+            --verify-tag --notes-from-tag --title "$GITHUB_REF_NAME"
