@@ -171,7 +171,8 @@ export class GitSyncEngine {
       removed.push(name);
     }
     if (!removed.length) return;
-    this.journal.emptiesRemoved = removed;
+    // 一次同步可能应用两次（整合后推送被拒再整合），记录要累加
+    (this.journal.emptiesRemoved ??= []).push(...removed);
     this.log("Empty files removed", removed);
   }
   // 在 add / LFS clean 前筛掉超限文件；已有历史中未修改的大文件不受影响

@@ -301,7 +301,14 @@ async function diaries() {
  await remoteCommit(f,'Daily/today.md','written on peer\n');
  await run(f,'onLoad');assert.equal(await read(f.local,'Daily/today.md'),'written on peer\n');
  assert.deepEqual((await history(f)).at(-1).emptiesRemoved,['Daily/today.md']);assert.ok(await exists('Daily/2026/old.md'));
- console.log('PASS empty .md never committed or cleaned up; colliding empty .md yield to remote');
+ // 一次同步应用两次（整合后推送被拒，再整合）时，两次删除的空 md 都要记录
+ const d=await fixture('empty-twice');await run(d);
+ await remoteCommit(d,'a.md','peer a\n');await write(d.local,'a.md','');await write(d.local,'b.md','');await write(d.local,'mine.md','mine\n');
+ const push=d.engine.pushRefs.bind(d.engine);let mainPushes=0;
+ d.engine.pushRefs=async(specs,...rest)=>{if(specs[0].endsWith(':refs/heads/main')&&++mainPushes===1)await remoteCommit(d,'b.md','peer b\n');return push(specs,...rest);};
+ await run(d,'onCron');assert.deepEqual((await history(d)).at(-1).emptiesRemoved,['a.md','b.md']);
+ assert.equal(await read(d.local,'a.md'),'peer a\n');assert.equal(await read(d.local,'b.md'),'peer b\n');
+ console.log('PASS empty .md never committed or cleaned up; colliding empty .md yield to remote, removals from both applies recorded');
 }
 
 async function main() {
