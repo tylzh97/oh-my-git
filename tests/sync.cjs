@@ -141,6 +141,8 @@ async function failures() {
  assert.throws(()=>git(m.local,'merge','origin/main'));const before=git(m.local,'rev-parse','HEAD');
  await assert.rejects(()=>run(m,'onSave'),e=>e.code==='unfinished'&&e.message.includes('MERGE_HEAD'));
  assert.equal(git(m.local,'rev-parse','HEAD'),before);assert.notEqual(git(m.local,'ls-files','-u'),'');
+ // 仓库检查阶段的失败同样写入 history
+ assert.ok((await history(m)).some(entry=>entry.event==='onSave'&&entry.outcome==='error'&&entry.errorCode==='unfinished'));
  assert.ok(!git(m.remote,'show','main:note.md').includes('<<<<<<<'));
  await write(m.local,'note.md','resolved\n');git(m.local,'add','note.md');git(m.local,'commit','--no-edit');
  await run(m,'onSave');assert.equal(git(m.remote,'show','main:note.md'),'resolved');
@@ -185,6 +187,7 @@ async function failures() {
  await assert.rejects(()=>run(c,'onLoad'),e=>e.code==='repo'&&e.message.includes('index.lock'));
  assert.ok(await fs.stat(lock));assert.deepEqual((await fs.readdir(dir)).filter(name=>name.startsWith('.omg.')),[]);
  assert.ok((await history(c)).some(entry=>entry.operationId==='killed'&&entry.outcome==='interrupted'&&entry.phase==='push'));
+ assert.ok((await history(c)).some(entry=>entry.event==='onLoad'&&entry.errorCode==='repo'&&entry.error.includes('index.lock')));
  await fs.rm(lock);await run(c,'onRetry');assert.equal(git(c.remote,'show','main:locked.md'),'locked');
  const running=Symbol.for('omg-sync.running');globalThis[running]=true;
  await assert.rejects(()=>run(c,'onLoad'),e=>e.code==='failed'&&e.message.includes('previous plugin instance'));globalThis[running]=false;

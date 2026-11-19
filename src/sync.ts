@@ -14,7 +14,7 @@ export interface SyncResult { skipped: OversizedFile[] }
 interface Context { branch: string; remote: string; remoteRef: string; upstream: string }
 interface RecoveryRefs { localRecoveryRef: string; remoteRecoveryRef: string }
 interface Journal {
-  operationId: string; event: SyncEvent; phase: string; branch: string; upstream: string;
+  operationId: string; event: SyncEvent; phase: string; branch?: string; upstream?: string;
   localCommit?: string; remoteCommit?: string; localRecoveryRef?: string; remoteRecoveryRef?: string;
   resultCommit?: string; temporaryWorktree?: string; skipped?: OversizedFile[];
   emptySkipped?: string[]; emptiesRemoved?: string[];
@@ -408,14 +408,11 @@ export class GitSyncEngine {
     try {
       this.signal = signal;
       await fs.mkdir(this.stateDir, { recursive: true });
-      if (event === "onLoad") await this.cleanup();
       this.device = await this.loadDevice();
-      // 先于分支检查：rebase 期间 HEAD 分离，应报可自动恢复的 unfinished 而非阻塞的 repo
-      await this.checkUnfinished();
-      this.context = await this.loadContext();
+      // 先建记录：仓库检查阶段的失败（repo、unfinished）也写入 history
       this.journal = {
         operationId: `${new Date().toISOString().replace(/[-:.]/g, "")}-${this.device}-${randomBytes(4).toString("hex")}`,
-        event, phase: "start", outcome: "running", branch: this.context.branch, upstream: this.context.upstream,
+        event, phase: "start", outcome: "running",
       };
       return await this.execute(event, details);
     } finally {
@@ -424,6 +421,12 @@ export class GitSyncEngine {
   }
   private async execute(event: SyncEvent, details: SyncDetails | undefined): Promise<SyncResult> {
     try {
+      // cleanup 必须先于第一次 phase()：否则会把本次的 pending 当作上次的残留
+      if (event === "onLoad") await this.cleanup();
+      // 先于分支检查：rebase 期间 HEAD 分离，应报可自动恢复的 unfinished 而非阻塞的 repo
+      await this.checkUnfinished();
+      this.context = await this.loadContext();
+      Object.assign(this.journal, { branch: this.context.branch, upstream: this.context.upstream });
       await this.phase("snapshot");
       if (event === "onLoad") await this.cleanEmptyDiaries();
       const snapshot = await this.snapshot();
