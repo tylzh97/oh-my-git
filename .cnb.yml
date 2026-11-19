@@ -1,3 +1,19 @@
+# 发布流水线共用：测试并构建出 dist/。node:22 不带 git-lfs，集成测试需要它
+.build: &build
+  name: test and build
+  script:
+    - apt-get update -qq && apt-get install -y -qq git-lfs
+    - npm ci
+    - npm test
+
+# Release 附件：dist/ 的全部分发内容
+.assets: &assets
+  - dist/main.js
+  - dist/manifest.json
+  - dist/config.jsonc
+  - dist/scripts/setup-git.cmd
+  - dist/scripts/prune-recovery.cjs
+
 main:
   push:
     - imports:
@@ -12,3 +28,28 @@ main:
             password: ${GITHUB_SYNC_TOKEN}
             branch: main
             force: true
+    # main 每次更新后测试、构建，并滚动发布到 nightly 预发布版本
+    - name: nightly
+      docker:
+        image: node:22
+      # 连续推送时只保留最新一次，避免两次发布的删除/重建交错
+      lock:
+        key: nightly
+        cancel-in-progress: true
+      stages:
+        - *build
+        # Release 按 Tag 重建，先把 nightly 这个 Tag 移到本次提交
+        - name: move nightly tag
+          script: git push --force origin HEAD:refs/tags/nightly
+        - name: nightly release
+          type: git:release
+          options:
+            tag: nightly
+            title: nightly
+            description: Built from $CNB_COMMIT
+            preRelease: true
+        - name: upload assets
+          image: cnbcool/attachments:latest
+          settings:
+            tag: nightly
+            attachments: *assets

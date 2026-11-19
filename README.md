@@ -46,6 +46,10 @@ dist/              # 构建产物，即分发内容（不入库）
 
 ## 发版
 
+**nightly**：`main` 每次更新后，CNB 流水线（`.cnb.yml`）自动测试、构建，把 `nightly` 这个 Tag 移到最新提交，并重建同名的预发布版本，附件为 `dist/` 的全部文件。GitHub 镜像上的 nightly 由 `.github/workflows/nightly.yml` 另行发布。
+
+**正式版**：
+
 1. 同步修改 `manifest.json`、`package.json` 的 `version`，并在 `versions.json` 中追加 `"<版本>": "<minAppVersion>"`。
 2. `npm test`，提交后推送到 GitHub 默认分支。
 3. 创建 GitHub Release，tag 与 `version` 完全一致（不带 `v`），附件上传 `dist/main.js` 和 `dist/manifest.json`。
