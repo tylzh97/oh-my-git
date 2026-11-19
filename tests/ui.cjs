@@ -110,23 +110,21 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   }
   language = 'en'; w.render(); assert.ok(tooltip.includes('normal sync remains available'));
   w.activate(); await tick(); assert.equal(requests.at(-1).event, 'onClick'); assert.equal(w.menu, undefined);
-  assert.equal(w.state, 'error'); // 第 5 次连续失败
+  assert.equal(w.state, 'warning'); // 连续失败不升级
   w.engine = { async run(event, details) { requests.push({ event, details }); return ok; } };
   await w.sync('onCron'); assert.equal(w.state, 'idle'); assert.equal(icon, 'refresh-cw');
   w.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('repo'); } };
   await w.sync('onCron'); assert.equal(w.state, 'error'); const stopped = requests.length;
   await w.sync('onCron'); assert.equal(requests.length, stopped);
 
-  // 非阻塞失败（remote/failed）连续 5 次显示 ×，但普通事件仍然执行；成功一次清零
+  // 非阻塞失败（remote/failed）始终显示 !，不升级为 ×；普通事件仍然执行
   language = 'zh'; const r = plugin();
   r.engine = { async run(event, details) { requests.push({ event, details }); throw new SyncError('remote', 'git fetch: Could not resolve host'); } };
-  for (let i = 1; i <= 4; i++) { await r.sync('onCron'); assert.equal(r.state, 'warning'); }
+  for (let i = 1; i <= 6; i++) { await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(icon, 'triangle-alert'); }
   r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('failed'); };
-  await r.sync('onRename'); assert.equal(r.state, 'error'); assert.equal(icon, 'x'); assert.ok(tooltip.includes('连续多次失败') && tooltip.includes('(5)'));
-  const escalated = requests.length; await r.sync('onSave'); assert.equal(requests.length, escalated + 1); assert.equal(r.state, 'error');
-  r.activate(); assert.deepEqual(r.menu.items.map(item => item.title), ['重试']); r.menu.hide();
+  const repeated = requests.length; await r.sync('onSave'); assert.equal(requests.length, repeated + 1); assert.equal(r.state, 'warning');
   r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };
-  await r.sync('onCron'); assert.equal(r.state, 'idle'); assert.equal(r.failures, 0);
+  await r.sync('onCron'); assert.equal(r.state, 'idle');
   r.engine.run = async (event, details) => { requests.push({ event, details }); throw new SyncError('remote'); };
   await r.sync('onCron'); assert.equal(r.state, 'warning');
 
@@ -136,9 +134,9 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   r.engine.run = async (event, details) => { requests.push({ event, details }); return ok; };
   await r.sync('onSave'); assert.equal(r.state, 'idle');
 
-  // 跳过超限文件：同步成功，显示 ! 和文件列表，计数清零，不阻塞
+  // 跳过超限文件：同步成功，显示 ! 和文件列表，不阻塞
   r.engine.run = async (event, details) => { requests.push({ event, details }); return { skipped: [{ path: 'big.mp4', bytes: 40 * 1024 * 1024 }] }; };
-  await r.sync('onCron'); assert.equal(r.state, 'warning'); assert.equal(r.failures, 0);
+  await r.sync('onCron'); assert.equal(r.state, 'warning');
   assert.ok(tooltip.includes('已跳过') && tooltip.includes('big.mp4 (40.00 MiB)')); assert.ok(!tooltip.includes('上次同步失败'));
   const sizeCount = requests.length; await r.sync('onSave'); assert.equal(requests.length, sizeCount + 1);
 
@@ -233,6 +231,6 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS save shortcut keydown(window capture)/command(save command), failure escalation, oversized warning, automatic save debounce, rename, retry/resolve, busy/cooldown requests coalesced, bilingual UI, startup config and unload');
+  console.log('PASS save shortcut keydown(window capture)/command(save command), non-blocking failures, oversized warning, automatic save debounce, rename, retry/resolve, busy/cooldown requests coalesced, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 

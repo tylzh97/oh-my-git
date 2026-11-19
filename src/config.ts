@@ -8,7 +8,6 @@ export interface SyncConfig {
   networkTimeoutSeconds: number;
   maxFileMiB: number;
   successDisplayMs: number;
-  escalateAfterFailures: number;
   saveHook: "command" | "keydown";
   monthlyBackupEnabled: boolean;
   lfsExtensions: string[];

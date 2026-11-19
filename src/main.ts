@@ -6,7 +6,7 @@ import { errorText, t } from "./i18n";
 
 type SyncState = "idle" | "syncing" | "success" | "warning" | "error";
 const MANUAL_SAVE_DEBOUNCE_MS = 500;
-// 只有这些错误会暂停普通事件；其余失败不阻塞，本地快照照常进行
+// 这些错误显示 × 并暂停普通事件；其余失败显示 !，不阻塞，本地快照照常进行
 const BLOCKING: ErrorCode[] = ["config", "repo", "refused", "conflict", "nogit", "nolfs"];
 const SAVE_CALLBACKS = ["callback", "checkCallback", "editorCallback", "editorCheckCallback"] as const;
 type SaveCommand = Partial<Record<typeof SAVE_CALLBACKS[number], (...args: unknown[]) => unknown>>;
@@ -26,17 +26,16 @@ export default class OhMyGitPlugin extends Plugin {
   private failure?: SyncError;
   private config: SyncConfig = DEFAULT_CONFIG;
   private saveTimer?: number;
-  private failures = 0;
+  // error 状态只来自阻塞类失败
   private blocked(): boolean {
-    return this.state === "error" && !!this.failure && BLOCKING.includes(this.failure.code);
+    return this.state === "error";
   }
   private errorLabel(): string {
     const error = this.failure ?? new SyncError("failed");
     const files = error.files?.map(file => `${file.path} (${(file.bytes / 1024 / 1024).toFixed(2)} MiB)`).join("; ");
     const limit = error.code === "size" ? ` (${this.config.maxFileMiB} MiB)` : "";
     // size 时同步其实已成功，不追加失败说明
-    const action = error.code === "size" ? "" : this.state === "warning" ? t("warning")
-      : !this.blocked() ? `${t("repeated")} (${this.failures})` : t(this.engine ? "resolve" : "reload");
+    const action = error.code === "size" ? "" : this.state === "warning" ? t("warning") : t(this.engine ? "resolve" : "reload");
     return `Git Sync: ${errorText(error.code)}${limit}${files ? ` — ${files}` : ""}${action ? ` — ${action}` : ""}`;
   }
   private render(): void {
@@ -196,7 +195,6 @@ export default class OhMyGitPlugin extends Plugin {
       const { skipped } = await this.engine.run(event, details, task.signal);
       if (task.signal.aborted) return;
       this.animation?.cancel(); this.animation = undefined;
-      this.failures = 0;
       if (skipped.length) {
         // 同步成功但跳过了超限文件：提示但不阻塞
         this.failure = new SyncError("size", undefined, skipped); this.state = "warning";
@@ -209,9 +207,8 @@ export default class OhMyGitPlugin extends Plugin {
       if (task.signal.aborted) { this.state = "idle"; this.log("Sync cancelled", { event }); }
       else {
         this.failure = error instanceof SyncError ? error : new SyncError("failed", String(error));
-        if (BLOCKING.includes(this.failure.code)) this.state = "error";
-        else this.state = ++this.failures >= this.config.escalateAfterFailures ? "error" : "warning";
-        this.log("Sync failed", { event, code: this.failure.code, message: this.failure.message, failures: this.failures });
+        this.state = BLOCKING.includes(this.failure.code) ? "error" : "warning";
+        this.log("Sync failed", { event, code: this.failure.code, message: this.failure.message });
       }
     } finally {
       this.animation?.cancel(); this.animation = undefined;

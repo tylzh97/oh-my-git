@@ -30,10 +30,6 @@ const UI = {
     en: "Fix the problem and reload the plugin",
     zh: "处理问题后重新启用插件",
   },
-  repeated: {
-    en: "Failed repeatedly; sync keeps trying",
-    zh: "连续多次失败，同步仍在继续尝试",
-  },
   retry: {
     en: "Retry",
     zh: "重试",
