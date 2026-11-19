@@ -78,3 +78,11 @@ main:
           image: cnbcool/attachments:latest
           settings:
             attachments: *assets
+        # CNB 发布成功后只把这一个 Tag 推到 GitHub，触发那边的 release 工作流。
+        # 工作区里不保证有这个 Tag 的引用，先从 origin 取回带附注的 Tag 对象再推
+        - name: push tag to github
+          imports:
+            - https://cnb.cool/maikebuke/RH/Notes/Plugins/Secrets/-/blob/main/github.yml
+          script:
+            - git fetch --force origin "refs/tags/${CNB_BRANCH}:refs/tags/${CNB_BRANCH}"
+            - git push "https://${GITHUB_SYNC_USER}:${GITHUB_SYNC_TOKEN}@github.com/tylzh97/oh-my-git.git" "refs/tags/${CNB_BRANCH}"

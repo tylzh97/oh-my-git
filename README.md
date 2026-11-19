@@ -59,8 +59,9 @@ dist/              # 构建产物，即分发内容（不入库）
    ```
 
 3. CNB 流水线自动完成其余步骤：校验 Tag 与上面三个文件里的版本一致，测试、构建，创建 Release（说明取 Tag 的附注信息），上传 `dist/` 的全部文件。校验或测试失败时不会创建 Release。
+4. CNB 发布成功后，流水线把这个 Tag 推到 GitHub。那里的 `.github/workflows/release.yml` 再独立校验、测试、构建一遍，发布同名 Release。Obsidian 社区市场从 GitHub 的 Release 取 `main.js` 和 `manifest.json`。
 
-只有数字开头的 Tag 会触发发布，流水线配置取自 Tag 所在的提交。要上架 Obsidian 社区市场，还需在 GitHub 手动创建同名 Release，附件上传 `dist/main.js` 和 `dist/manifest.json`：社区市场只从 GitHub 取文件。
+只有数字开头的 Tag 会触发发布，两边的流水线配置都取自 Tag 所在的提交。其他 Tag 不会同步到 GitHub。
 
 ## 许可证
 
