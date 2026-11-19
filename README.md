@@ -186,9 +186,9 @@ node scripts/prune-recovery.cjs [Vault路径] [天数=90] [--delete]
 - LFS 对象由 `git lfs install --local` 安装的 pre-push hook 上传；不会覆盖用户自定义的 pre-push hook，有冲突时 Git LFS 报错，需要自行整合。
 - 已有历史不重写、不迁移。
 
-## 提交元数据（schemaVersion 2）
+## 提交元数据（schemaVersion 3）
 
-提交标题固定为英文，正文中用 Ogit-Metadata-Begin / Ogit-Metadata-End 包围一段 JSON：operationId、event、action、device、time、branch、upstream、resultTree、parents；整合提交还包含 localCommit、remoteCommit、两个恢复分支名，选边提交另有 strategy、reason。
+提交标题固定为英文，正文中用 Ogit-Metadata-Begin / Ogit-Metadata-End 包围一段 JSON：operationId、event、action、device、time、branch、upstream；整合提交还包含 localCommit、remoteCommit、两个恢复分支名，选边提交另有 strategy、reason。
 
 只读解析：在插件目录执行 `node scripts/read-record.cjs <提交ID> [Vault路径]`。
 查看已推送的快照：`git show <恢复分支>:<文件路径>`。LFS 文件显示的是指针，恢复二进制需要在独立 worktree 中执行 lfs pull。

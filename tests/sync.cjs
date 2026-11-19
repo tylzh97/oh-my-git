@@ -63,10 +63,9 @@ async function basics() {
  await expectCode(()=>run(f,'onSave'),'conflict');assert.equal(git(f.remote,'rev-parse','main'),beforeRemote);
  assert.equal(await read(f.local,'daily.md'),'daily local\n');
  await run(f,'onResolve','local');assertMerged(f);assert.equal(git(f.remote,'show','main:daily.md'),'daily local');
- const record=metadata(f.remote,'main');assert.equal(record.schemaVersion,2);assert.equal(record.strategy,'local');
- assert.deepEqual(record.parents,git(f.remote,'rev-list','--parents','-n','1','main').split(' ').slice(1));
- assert.equal(record.parents[0],beforeRemote);assert.equal(record.parents[1],record.localCommit);
- assert.equal(record.resultTree,git(f.remote,'rev-parse','main^{tree}'));assert.equal(git(f.remote,'rev-parse',record.remoteRecoveryRef),beforeRemote);
+ const record=metadata(f.remote,'main');assert.equal(record.schemaVersion,3);assert.equal(record.strategy,'local');
+ assert.deepEqual(git(f.remote,'rev-list','--parents','-n','1','main').split(' ').slice(1),[beforeRemote,record.localCommit]);
+ assert.equal(git(f.remote,'rev-parse',record.remoteRecoveryRef),beforeRemote);
  console.log('PASS daily conflict protects both sides, keep-local merge commit, JSON metadata');
 
  // 闲置设备 onCron 拉取、启动快进：都不创建恢复分支

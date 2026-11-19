@@ -8,6 +8,6 @@ const message = execFileSync('git',['show','-s','--format=%B',ref],{cwd,encoding
 const match = message.match(/^Ogit-Metadata-Begin\r?\n([\s\S]*?)\r?\nOgit-Metadata-End$/m);
 if (!match) throw new Error('No OGit metadata in this commit');
 const data = JSON.parse(match[1]);
-if (![1,2].includes(data.schemaVersion)) throw new Error('Unsupported metadata schema');
+if (![3].includes(data.schemaVersion)) throw new Error('Unsupported metadata schema');
 console.log(JSON.stringify(data,null,2));
 

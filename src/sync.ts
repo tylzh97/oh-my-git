@@ -138,16 +138,12 @@ export class GitSyncEngine {
   }
 
   private metadata(action: string, extra: Record<string, unknown> = {}): Record<string, unknown> {
-    return { schemaVersion: 2, pluginVersion: manifest.version, operationId: this.journal.operationId,
+    return { schemaVersion: 3, pluginVersion: manifest.version, operationId: this.journal.operationId,
       event: this.journal.event, action, device: this.device, time: new Date().toISOString(),
       branch: this.context.branch, upstream: this.context.upstream, ...extra };
   }
   private async commit(title: string, data: Record<string, unknown>, cwd = this.root): Promise<string> {
-    const parents = [await this.git(["rev-parse", "HEAD"], cwd)];
-    const mergeHead = await this.tryGit(["rev-parse", "--verify", "MERGE_HEAD"], cwd);
-    if (mergeHead) parents.push(mergeHead);
-    const resultTree = await this.git(["write-tree"], cwd);
-    const record = JSON.stringify({ ...data, resultTree, parents }, null, 2);
+    const record = JSON.stringify(data, null, 2);
     await this.git(["commit", "--allow-empty", "-F", "-"], cwd, `${title}\n\nOgit-Metadata-Begin\n${record}\nOgit-Metadata-End\n`);
     return this.git(["rev-parse", "HEAD"], cwd);
   }
