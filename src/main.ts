@@ -16,6 +16,7 @@ export default class OhMyGitPlugin extends Plugin {
   private openFiles = new Set<string>();
   private button?: HTMLElement;
   private task?: AbortController;
+  private pending = false;
   private animation?: Animation;
   private state: SyncState = "idle";
   private menu?: Menu;
@@ -147,7 +148,7 @@ export default class OhMyGitPlugin extends Plugin {
     this.log("Placebo hooked save command", { mode: "hidden", callbacks: hooked });
   }
   private async sync(event: SyncEvent, details?: SyncDetails): Promise<void> {
-    if (this.task) { this.log("Sync dropped (busy)", { event }); return; }
+    if (this.task) { this.pending = true; this.log("Sync queued (busy)", { event }); return; }
     if (this.blocked() && event !== "onRetry" && !(event === "onResolve" && details?.strategy && this.failure?.code === "conflict")) {
       this.log("Sync dropped (error state)", { event }); return;
     }
@@ -186,6 +187,9 @@ export default class OhMyGitPlugin extends Plugin {
       this.animation?.cancel(); this.animation = undefined;
       if (this.task === task) this.task = undefined;
       if (this.enabled && this.button === button) this.render();
+      // 合并忙时的所有请求；完整同步也覆盖待处理的拉取事件
+      const pending = this.pending; this.pending = false;
+      if (pending && this.enabled && !this.blocked()) this.trigger("onCron");
     }
   }
   // 核心插件「日记」的目录；读不到或位于 Vault 根目录时返回 ""，引擎不做 onLoad 旧空日记清理
@@ -240,7 +244,7 @@ export default class OhMyGitPlugin extends Plugin {
     this.trigger("onLoad");
   }
   onunload(): void {
-    this.log("onUnload"); this.enabled = false; window.clearTimeout(this.saveTimer); window.clearTimeout(this.placeboTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
+    this.log("onUnload"); this.enabled = false; this.pending = false; window.clearTimeout(this.saveTimer); window.clearTimeout(this.placeboTimer); this.menu?.hide(); this.task?.abort(); this.animation?.cancel();
     this.openFiles.clear(); this.button = undefined;
   }
 }

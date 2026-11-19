@@ -163,7 +163,23 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   await busy.sync('onCron'); assert.equal(requests.length, busyCount);
   complete(ok); await tick(); assert.equal(busy.state, 'success'); assert.equal(icon, 'check');
   await busy.sync('onRetry'); assert.equal(requests.length, busyCount);
-  await active; assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
+  // 忙时及成功显示期间的事件合并为一次完整同步
+  busy.engine.run = async event => { requests.push({ event }); return ok; };
+  await active; assert.equal(requests.length, busyCount + 1); assert.equal(requests.at(-1).event, 'onCron');
+  await sleep(50); assert.equal(busy.state, 'idle'); busy.onunload(); assert.equal(busy.enabled, false);
+
+  // 阻塞失败和卸载不自动补跑；普通失败仍允许补跑
+  for (const outcome of ['conflict','remote','unload']) {
+    const queued = plugin(); let finish;
+    const events = [];
+    queued.engine = { run(event) { events.push(event); return new Promise((resolve,reject) => { finish = () => outcome === 'unload' ? resolve(ok) : reject(new SyncError(outcome)); }); } };
+    const running = queued.sync('onSave'); await queued.sync('onRename'); await queued.sync('onSave');
+    queued.engine.run = async event => { events.push(event); return ok; };
+    if (outcome === 'unload') queued.onunload();
+    finish(); await running; await sleep(10);
+    assert.deepEqual(events, outcome === 'remote' ? ['onSave','onCron'] : ['onSave']);
+    queued.onunload();
+  }
 
   let configPath;
   const adapter = new FileSystemAdapter(); adapter.exists = async file => { configPath = file; return true; };
@@ -232,6 +248,6 @@ function startup(adapter, manifest = { id: 'oh-my-git', dir: '.custom/plugins/re
   adapter.read = () => new Promise(resolve => { finishReading = resolve; });
   const unloaded = startup(adapter); const loading = unloaded.onload(); await tick(); unloaded.onunload();
   finishReading('{}'); await loading; assert.equal(unloaded.engine, undefined);
-  console.log('PASS placebo default(window capture)/hidden(save command), failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success hold, bilingual UI, startup config and unload');
+  console.log('PASS placebo default(window capture)/hidden(save command), failure escalation without blocking, oversized skip warning, save debounce, rename triggers immediate sync, Ctrl/Cmd+S placebo, warning allows normal events, refused/conflict block until retry, busy/success requests coalesced, bilingual UI, startup config and unload');
 })().catch(error => { console.error(error); process.exitCode = 1; });
 
