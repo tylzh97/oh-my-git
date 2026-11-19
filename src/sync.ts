@@ -279,9 +279,25 @@ export class GitSyncEngine {
     }
     return this.integrate(local, remote, label);
   }
+  // Git 会覆盖未跟踪但被忽略的文件；同时检查文件/目录互换造成的路径冲突
+  private async checkIgnoredCollisions(local: string, result: string): Promise<void> {
+    const incoming = (await this.git(["diff", "--no-renames", "--name-only", "-z", "--diff-filter=ACMT", local, result])).split("\0").filter(Boolean);
+    const files = new Set(incoming);
+    const directories = new Set<string>();
+    for (const name of incoming) {
+      for (let parent = path.posix.dirname(name); parent !== "."; parent = path.posix.dirname(parent)) directories.add(parent);
+    }
+    const ignored = (await this.git(["ls-files", "--others", "--ignored", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
+    for (const name of ignored) {
+      let collision = files.has(name) || directories.has(name);
+      for (let parent = path.posix.dirname(name); parent !== "."; parent = path.posix.dirname(parent)) collision ||= files.has(parent);
+      if (collision) throw new SyncError("failed", `Incoming changes would overwrite ignored file: ${name}; move it before retrying`);
+    }
+  }
   // 把 Vault 从 local 推进到 result
   private async apply(local: string, result: string): Promise<void> {
     await this.phase("apply", { resultCommit: result });
+    await this.checkIgnoredCollisions(local, result);
     await this.removeCollidingEmpties(result);
     // 两树 read-tree 拒绝覆盖未提交修改和未跟踪文件；不在 Vault 中 reset --hard
     await this.git(["read-tree", "-m", "-u", local, result]);

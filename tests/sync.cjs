@@ -182,6 +182,26 @@ async function failures() {
  console.log('PASS startup cleanup of interrupted state, locks never deleted, previous instance guard');
 }
 
+async function ignoredCollisions() {
+ for (const [name,ignored,incoming] of [
+  ['same-file','private.md','private.md'],
+  ['incoming-directory','private','private/note.md'],
+  ['incoming-file','private/note.md','private'],
+ ]) {
+  const f=await fixture('ignored-'+name);await run(f);
+  await write(f.local,'.gitignore','private\nprivate.md\n');await run(f,'onSave');
+  await write(f.local,ignored,'local secret\n');
+  git(f.peer,'pull','--ff-only');await write(f.peer,incoming,'remote content\n');
+  git(f.peer,'add','-f','--',incoming);git(f.peer,'commit','-m','test: incoming ignored path');git(f.peer,'push');
+  const head=git(f.local,'rev-parse','HEAD');
+  await assert.rejects(()=>run(f,'onCron'),e=>e.code==='failed'&&e.message.includes(ignored));
+  assert.equal(await read(f.local,ignored),'local secret\n');assert.equal(git(f.local,'rev-parse','HEAD'),head);
+  await fs.rm(path.join(f.local,'private'),{recursive:true,force:true});await fs.rm(path.join(f.local,'private.md'),{force:true});
+  await run(f,'onRetry');assert.equal(await read(f.local,incoming),'remote content\n');
+ }
+ console.log('PASS ignored file and file/directory collisions stop apply, retry succeeds after moving local files');
+}
+
 async function sizes() {
  const config={...DEFAULT_CONFIG,maxFileMiB:1},limit=1024*1024;
  const f=await fixture('size',config);await run(f);
@@ -257,6 +277,7 @@ async function main() {
  await basics();
  await conflicts();
  await failures();
+ await ignoredCollisions();
  await sizes();
  await monthly();
  await diaries();
